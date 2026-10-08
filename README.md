@@ -40,3 +40,37 @@ The builder has procedural gate previews and loads matching GLB models from `pub
 npm run build
 npm start
 ```
+
+## Free Cloudflare deployment
+
+The project can run without a Node.js host on Cloudflare Workers Free. `worker.mjs` serves the built Vite site as static assets and routes the existing account, friend, team, community-track, leaderboard, and flight-party APIs through a SQLite-backed Durable Object. The Durable Object keeps the app data across requests and serializes API updates. It uses Cloudflare's free SQLite Durable Object allocation; it does not require a paid Workers plan.
+
+The current setup is intended for a small launch. It stores the app state in one Durable Object, so requests share one serialized state store; a larger audience would need a more scalable data design. Cloudflare Free currently has daily Workers and Durable Objects request limits, plus an account-wide 5 GB SQLite Durable Objects storage limit. Static asset requests do not count against the Workers request quota. See [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), and [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/).
+
+If traffic grows, monitor the Worker and Durable Object request/CPU/storage graphs in the Cloudflare dashboard. Static downloads are already free and unlimited. For API traffic, the next simplest step is Workers Paid (starting at $5/month, with metered overages); the next architecture step is to split lobbies into separate Durable Objects, move account/friend/team records into D1, and put community images in R2. D1 currently includes 5 million rows read/day and 100,000 rows written/day on Free, and R2 includes 10 GB-month storage, 1 million Class A operations/month, and 10 million Class B operations/month. Keep an eye on their separate quotas and pricing as usage grows.
+
+1. Install dependencies and authenticate Wrangler with your Cloudflare account:
+
+   ```sh
+   npm install
+   npx wrangler login
+   ```
+
+2. Create the Worker and upload the site:
+
+   ```sh
+   npm run cf:deploy
+   ```
+
+3. In the Cloudflare dashboard, open **Workers & Pages** → `xspec-flight-lab` → **Settings** → **Variables and Secrets**. Add these as secrets:
+   - `AUTH_CODE_SECRET`: a long, unique random secret. Do not reuse a password.
+   - `RESEND_API_KEY`: the API key for a verified Resend sender.
+   - `AUTH_FROM_EMAIL`: the verified sender address.
+
+   Email sign-in will return a configuration error until all three are set. Resend has a free tier with a daily sending limit; see [Resend pricing](https://resend.com/pricing).
+
+4. To deploy future GitHub changes automatically, connect `WestFPV/Xspec` in Cloudflare Workers Builds and use `npm run build` as the build command and `npx wrangler deploy` as the deploy command. Set the same secrets for the production environment.
+
+5. Add your domain as a custom domain in the Worker settings. Keep Cloudflare as the domain's DNS provider; no separate Node.js server is required.
+
+This Cloudflare database starts empty and does not automatically import local `.data/accounts.json` data. Local `.data` remains on the development computer. The existing Node.js commands above continue to work for local development.

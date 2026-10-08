@@ -7,7 +7,9 @@
     "dev": "node --env-file-if-exists=.env server.mjs",
     "build": "tsc -b && vite build",
     "preview": "node --env-file-if-exists=.env server.mjs --production",
-    "start": "node --env-file-if-exists=.env server.mjs --production"
+    "start": "node --env-file-if-exists=.env server.mjs --production",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "three": "^0.180.0"
@@ -15,6 +17,7 @@
   "devDependencies": {
     "@types/three": "^0.180.0",
     "typescript": "~5.9.3",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "wrangler": "^4.149.0"
   }
 }
