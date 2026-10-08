@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111719" />
+    <meta name="description" content="Xspec — FPV Flight Lab. Build a line, then fly it." />
+    <title>Xspec — FPV Flight Lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./src/main.ts"></script>
+  </head>
+  <body>
+    <main class="app-shell is-main-menu">
+      <div id="world" class="world" aria-label="Interactive 3D industrial yard"></div>
+      <div class="world-grade" aria-hidden="true"></div>
+      <div class="world-loading-screen" role="status" aria-live="polite" aria-label="Preparing the flight world">
+        <div class="world-loading-card">
+          <span class="world-loading-brand"><i aria-hidden="true"></i> XSPEC <b>/</b> FLIGHT LAB</span>
+          <strong>Preparing your flight</strong>
+          <p>Loading the world</p>
+          <span class="world-loading-progress" aria-hidden="true"><i></i></span>
+          <button id="worldLoadingRetry" class="world-loading-retry" type="button" hidden>RELOAD WORLD</button>
+        </div>
+      </div>
+      <script>
+        (() => {
+          let startupFailed = false;
+          const showStartupError = (message) => {
+            const shell = document.querySelector('.app-shell');
+            if (!shell || shell.classList.contains('has-rendered-world')) return;
+            startupFailed = true;
+            const screen = document.querySelector('.world-loading-screen');
+            if (!screen) return;
+            screen.setAttribute('aria-label', 'The flight world could not start');
+            screen.querySelector('strong').textContent = 'The world could not start';
+            screen.querySelector('p').textContent = message;
+            screen.querySelector('.world-loading-progress').hidden = true;
+            screen.querySelector('#worldLoadingRetry').hidden = false;
+          };
+          window.addEventListener('error', (event) => {
+            const detail = typeof event.message === 'string' ? event.message.trim().slice(0, 180) : '';
+            showStartupError(`${detail ? `Startup error: ${detail}. ` : 'A startup error interrupted the 3D world. '}Reload to try again.`);
+          }, true);
+          window.addEventListener('unhandledrejection', (event) => {
+            const reason = event.reason;
+            const detail = typeof reason?.message === 'string' ? reason.message.trim().slice(0, 180) : '';
+            showStartupError(`${detail ? `Startup error: ${detail}. ` : 'A startup task failed. '}Reload to try again.`);
+          });
+          window.setTimeout(() => {
+            if (!startupFailed) showStartupError('The 3D world did not respond. Reload to try again.');
+          }, 20000);
+          document.addEventListener('click', (event) => {
+            if (event.target instanceof Element && event.target.closest('#worldLoadingRetry')) window.location.reload();
+          });
+        })();
+      </script>
+      <div class="world-grain" aria-hidden="true"></div>
+
+      <header class="topbar">
+        <a class="brand" href="#home" aria-label="Xspec Flight Lab home">
+          <span class="brand-glyph" aria-hidden="true"><i></i><i></i><i></i><b></b></span>
+          <span class="brand-word">X<span>SPEC</span></span>
+          <span class="brand-slash"></span>
+          <span class="brand-edition">FLIGHT LAB</span>
+        </a>
+        <div class="top-status"><span class="status-pip"></span><span id="statusText">FLIGHT SYSTEMS READY</span><span class="status-divider">/</span><span>BUILD 0.2</span></div>
+        <button id="accountButton" class="account-button" type="button">SIGN IN</button>
+        <button id="friendsButton" class="friends-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="friendsPanel" aria-label="Friends: 0 online">
+          <i class="friends-online-dot" aria-hidden="true"></i><span id="onlineFriendCount">0</span><span class="friends-button-label">ONLINE</span>
+        </button>
+        <div id="pilotProgressCounter" class="pilot-progress-counter" role="group" aria-label="Pilot progression">
+          <span id="pilotRankEmblem" class="pilot-rank-emblem rank-unranked" role="img" aria-label="Unranked pilot">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path class="rank-emblem-aura" d="M24 2 44 13v22L24 46 4 35V13Z" />
+              <path class="rank-emblem-frame" d="M24 3.5 42.5 14v20L24 44.5 5.5 34V14Z" />
+              <path class="rank-emblem-shield" d="M24 8 37 15.3v15.4L24 38l-13-7.3V15.3Z" />
+              <path class="rank-emblem-wings" d="m13 20-5 2.2 5 2.1m22-4.3 5 2.2-5 2.1M15 28l-3 1.4m21-1.4 3 1.4" />
+              <path class="rank-emblem-drone" d="m24 16 6 5-6 9-6-9 6-5Zm-3 5h6m-5 5h4m-8-8-3-2m16 2 3-2" />
+              <text id="pilotRankMark" x="24" y="36" text-anchor="middle">0</text>
+            </svg>
+          </span>
+          <span><b id="pilotLevel">0</b><small>LEVEL</small></span>
+          <span><b id="pilotXp">0</b><small>XP</small></span>
+          <span><b id="pilotFirstPlaces">0</b><small>1ST</small></span>
+        </div>
+        <button id="settingsButton" class="settings-button" type="button" aria-label="Open settings" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm0-5.2 1.1 1.9 2.2.5 1.8-1.1 1.6 1.6-.9 2 1 2.1 2.1.8v2.3l-2.1.8-1 2.1.9 2-1.6 1.6-1.8-1.1-2.2.5L12 22l-1.1-1.9-2.2-.5-1.8 1.1-1.6-1.6.9-2-1-2.1-2.1-.8v-2.3l2.1-.8 1-2.1-.9-2 1.6-1.6 1.8 1.1 2.2-.5L12 3Z"/></svg>
+        </button>
+      </header>
+
+      <aside id="friendsPanel" class="friends-panel" role="dialog" aria-label="Friends" hidden>
+        <div class="friends-panel-heading">
+          <div><span class="friends-kicker">XSPEC / SOCIAL</span><h2>FRIENDS <small><b id="panelOnlineFriendCount">0</b> ONLINE</small></h2></div>
+          <button id="friendsClose" class="friends-close" type="button" aria-label="Close friends panel">×</button>
+        </div>
+        <p id="friendsSignInNotice" class="friends-sign-in" hidden>Sign in to add friends and see their status. <button id="friendsSignInButton" type="button">SIGN IN</button></p>
+        <form id="friendAddForm" class="friend-add-form">
+          <label for="friendUsername">ADD BY USERNAME</label>
+          <div><input id="friendUsername" name="username" type="text" minlength="3" maxlength="20" pattern="[A-Za-z0-9_]{3,20}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Pilot username" required /><button type="submit">ADD</button></div>
+        </form>
+        <p id="friendsMessage" class="friends-message" role="status" aria-live="polite"></p>
+        <section class="friends-section" aria-labelledby="friendsOnlineHeading">
+          <h3 id="friendsOnlineHeading">ONLINE NOW <span id="friendsOnlineSectionCount">0</span></h3>
+          <div id="onlineFriendList" class="friends-list" aria-live="polite"></div>
+        </section>
+        <section class="friends-section" aria-labelledby="partyInvitesHeading">
+          <h3 id="partyInvitesHeading">GAME INVITES <span id="partyInviteSectionCount">0</span></h3>
+          <div id="partyInviteList" class="friends-list" aria-live="polite"></div>
+        </section>
+        <section class="friends-section" aria-labelledby="friendsOfflineHeading">
+          <h3 id="friendsOfflineHeading">OFFLINE <span id="friendsOfflineSectionCount">0</span></h3>
+          <div id="offlineFriendList" class="friends-list"></div>
+        </section>
+        <section class="friends-section" aria-labelledby="friendsRequestsHeading">
+          <h3 id="friendsRequestsHeading">REQUESTS <span id="friendsRequestSectionCount">0</span></h3>
+          <div id="friendRequestList" class="friends-list"></div>
+        </section>
+        <section class="friends-section friends-pending-section" aria-labelledby="friendsPendingHeading" hidden>
+          <h3 id="friendsPendingHeading">PENDING SENT</h3>
+          <div id="outgoingFriendList" class="friends-list"></div>
+        </section>
+        <details id="friendsTeamDropdown" class="friends-team-dropdown">
+          <summary><span>TEAM HQ</span><small>Team XP, rank and crew</small></summary>
+            <section class="team-hub" aria-labelledby="teamHubTitle">
+              <header class="team-hub-heading">
+                <div><span class="panel-overline">PILOT CREWS / GLOBAL COMPETITION</span><h3 id="teamHubTitle">Team HQ</h3><p>Every completed crew race adds 100 XP to your team.</p></div>
+                <span class="team-rank-live"><i></i> WORLD RANKINGS</span>
+              </header>
+              <div class="team-hub-grid">
+                <section class="team-membership-card" aria-label="Your team">
+                  <div id="teamEmptyState" class="team-empty-state">
+                    <p id="teamSignInNotice" class="team-sign-in-notice" hidden>Sign in to create a team or join your crew. <button id="teamSignInButton" type="button">SIGN IN</button></p>
+                    <form id="teamCreateForm" class="team-action-form">
+                      <label for="teamNameInput">CREATE A TEAM</label>
+                      <div><input id="teamNameInput" type="text" minlength="3" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9 _-]{2,23}" placeholder="Team name" autocomplete="off" required /><button type="submit">CREATE</button></div>
+                    </form>
+                    <form id="teamJoinForm" class="team-action-form">
+                      <label for="teamInviteInput">JOIN A TEAM</label>
+                      <div><input id="teamInviteInput" type="text" minlength="6" maxlength="6" pattern="[A-HJ-NP-Za-hj-np-z2-9]{6}" placeholder="INVITE CODE" autocapitalize="characters" autocomplete="off" required /><button type="submit">JOIN</button></div>
+                    </form>
+                  </div>
+                  <div id="teamDetails" class="team-details" hidden>
+                    <div class="team-profile-heading"><span id="teamRankBadge" class="team-rank-badge">RANK —</span><div><strong id="teamName"></strong><small id="teamMemberCount"></small></div></div>
+                    <div class="team-xp-total"><span>TEAM EXPERIENCE</span><strong><b id="teamXp">0</b> XP</strong></div>
+                    <div class="team-invite-row"><span>INVITE CODE</span><strong id="teamInviteCode"></strong><button id="copyTeamCode" type="button">COPY</button></div>
+                    <div id="teamRoster" class="team-roster" aria-label="Team pilots"></div>
+                    <button id="leaveTeamButton" class="team-leave-button" type="button">LEAVE TEAM</button>
+                  </div>
+                  <p id="teamMessage" class="team-message" role="status" aria-live="polite"></p>
+                </section>
+                <section class="team-leaderboard-panel" aria-labelledby="teamLeaderboardTitle">
+                  <header><div><span class="panel-overline">TOP CREWS</span><h4 id="teamLeaderboardTitle">Team rankings</h4></div><small id="teamLeaderboardCount">0 TEAMS</small></header>
+                  <ol id="teamLeaderboard" class="team-leaderboard" aria-live="polite"><li class="team-rank-empty">No teams ranked yet. Create one and start racing.</li></ol>
+                </section>
+              </div>
+            </section>
+        </details>
+      </aside>
+
+      <section id="menu" class="menu-layout" data-page="singleplayer">
+        <section class="content-stage">
+          <div class="stage-kicker" hidden><span class="stage-cross">✳</span><span id="stageKicker">PILOT // SELECT A FLIGHT</span><span class="stage-kicker-line"></span><span id="stageLocation" class="stage-location">NIGHT CIRCUIT&nbsp; / &nbsp;NEON DOCKS</span></div>
+
+          <div id="menuChoiceStrip" class="menu-choice-switcher" role="group" aria-label="Choose a menu">
+            <button class="menu-choice" type="button" data-menu-choice="trackPicker" aria-pressed="false">
+              <svg class="choice-image" viewBox="0 0 180 96" aria-hidden="true"><defs><linearGradient id="trkSky" x2="0" y2="1"><stop stop-color="#061124"/><stop offset="1" stop-color="#102b3b"/></linearGradient><linearGradient id="trkGrass" x2="0" y2="1"><stop stop-color="#39d98a"/><stop offset="1" stop-color="#126c55"/></linearGradient><linearGradient id="trkDeck" x2="0" y2="1"><stop stop-color="#153b40"/><stop offset="1" stop-color="#071b27"/></linearGradient><filter id="trkGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="180" height="96" fill="url(#trkSky)"/><g fill="#d7f8ff" opacity=".75"><circle cx="13" cy="13" r=".8"/><circle cx="40" cy="8" r=".7"/><circle cx="84" cy="15" r=".7"/><circle cx="151" cy="12" r=".8"/></g><path d="M0 53 74 24 180 43 99 73Z" fill="#124456" opacity=".7"/><path d="M-8 58 74 30 190 52 104 85Z" fill="url(#trkDeck)" stroke="#48e8ff" stroke-width="1.4" filter="url(#trkGlow)"/><path d="M-8 58 104 85 104 96 -8 73ZM104 85 190 52 190 68 104 96Z" fill="#07141f"/><path d="m9 51 64-22 87 16-65 23Z" fill="#257e62" stroke="#84ffd0" stroke-width=".7"/><path d="m13 48 60-20 81 15-61 21Z" fill="none" stroke="#d4fff1" stroke-width="1" stroke-dasharray="2 2"/><path d="m21 55 61-20 80 16-63 22Z" fill="#39c77b" stroke="#b0ffd6" stroke-width=".8"/><path d="m26 53 56-18 72 15-58 19Z" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="2 2"/><g fill="none" stroke="#f4fbff" stroke-width="1.4"><path d="m27 42 7 2v8l-7-2Zm24-8 7 2v8l-7-2Zm53 10 7 2v8l-7-2Zm25 4 7 2v8l-7-2Z"/></g><g stroke="#48e8ff" stroke-width="1"><path d="M27 42v8m31-14v8m53 0v8m25-4v8"/></g><path d="m16 48 55-18 70 13M29 56l53-17 69 14" fill="none" stroke="#ff64c8" stroke-width="1.2" opacity=".9"/><g transform="translate(148 26) rotate(14)"><path d="M-10 1h6L0-2l5 3h7v3H5L0 7l-5-3h-5Z" fill="#d9f8ff" stroke="#42eaff" stroke-width="1"/><path d="M-5 1-8-4m13 5 3-5M-7 3l-4 4m16-4 4 4" stroke="#92f8ff" stroke-width="1.2"/><circle cx="-9" cy="-4" r="1.7" fill="#48e8ff"/><circle cx="8" cy="-4" r="1.7" fill="#48e8ff"/></g></svg>
+              <span class="choice-index" aria-hidden="true">01 / COURSE</span><span class="choice-copy"><span class="choice-title">Solo</span><span class="choice-subtitle">PICK YOUR LINE</span></span>
+            </button>
+            <button class="menu-choice" type="button" data-menu-choice="multiplayer" aria-pressed="false">
+              <svg class="choice-image" viewBox="0 0 180 96" aria-hidden="true"><defs><linearGradient id="mpSky" x2="0" y2="1"><stop stop-color="#071126"/><stop offset="1" stop-color="#19314a"/></linearGradient><linearGradient id="mpPod" x2="0" y2="1"><stop stop-color="#223e58"/><stop offset="1" stop-color="#0b1727"/></linearGradient><filter id="mpGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="180" height="96" fill="url(#mpSky)"/><g fill="#c9f9ff" opacity=".7"><circle cx="17" cy="12" r=".8"/><circle cx="56" cy="8" r=".7"/><circle cx="144" cy="13" r=".8"/><circle cx="168" cy="27" r=".7"/></g><path d="M0 58 31 33 148 32 180 54v42H0Z" fill="#10283a"/><path d="M-8 58 35 36h112l42 22-44 32H37Z" fill="url(#mpPod)" stroke="#50eaff" stroke-width="1.5" filter="url(#mpGlow)"/><path d="m37 90 44 6h64l44-32v32H37Z" fill="#090f1c"/><path d="m-8 58 43-22v12L-8 72Zm155-22 42 22v12l-42-22Z" fill="#172b42"/><path d="M17 60 50 43l82 0 31 17-34 23-80-1Z" fill="#1d3546" stroke="#ff54c8" stroke-width="1"/><path d="M29 62 55 49h70l25 13-26 17H55Z" fill="#d59b4b" stroke="#ffe6a2" stroke-width="1.3"/><path d="M39 63 57 54h66l18 9-19 12H58Z" fill="#f6bf66"/><g fill="#071321" stroke="#55edff" stroke-width="1.2"><path d="M53 60h7l4-2 4 2h7v2h-7l-4 2-4-2h-7Z"/><path d="M77 58h7l4-2 4 2h7v2h-7l-4 2-4-2h-7Z"/><path d="M101 60h7l4-2 4 2h7v2h-7l-4 2-4-2h-7Z"/><path d="M78 67h7l4-2 4 2h7v2h-7l-4 2-4-2h-7Z"/></g><g stroke="#b8ffff" stroke-width="1"><path d="m57 60-4-4m15 4 4-4m5-2-4-4m15 4 4-4m5 6-4-4m15 4 4-4m-29 13-4-4m15 4 4-4"/><circle cx="53" cy="56" r="1.7" fill="#46eaff"/><circle cx="72" cy="56" r="1.7" fill="#ff68c7"/><circle cx="73" cy="48" r="1.7" fill="#46eaff"/><circle cx="92" cy="48" r="1.7" fill="#ff68c7"/><circle cx="97" cy="56" r="1.7" fill="#46eaff"/><circle cx="116" cy="56" r="1.7" fill="#ff68c7"/><circle cx="73" cy="63" r="1.7" fill="#46eaff"/><circle cx="92" cy="63" r="1.7" fill="#ff68c7"/></g><text x="89" y="77" fill="#15324a" font-family="Arial,sans-serif" font-size="5" font-weight="bold" text-anchor="middle">PODIUM</text></svg>
+              <span class="choice-index" aria-hidden="true">02 / ONLINE</span><span class="choice-copy"><span class="choice-title">Multiplayer</span><span class="choice-subtitle">FLY WITH YOUR CREW</span></span>
+            </button>
+            <button class="menu-choice" type="button" data-menu-choice="builderMenu" aria-pressed="false">
+              <svg class="choice-image" viewBox="0 0 180 96" aria-hidden="true"><defs><linearGradient id="buildSky" x2="0" y2="1"><stop stop-color="#071329"/><stop offset=".48" stop-color="#1b4660"/><stop offset="1" stop-color="#b6f5d4"/></linearGradient><linearGradient id="buildField" x2="0" y2="1"><stop stop-color="#57df83"/><stop offset="1" stop-color="#21985f"/></linearGradient><filter id="buildGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="180" height="96" fill="url(#buildSky)"/><g fill="#d9f9ff" opacity=".65"><circle cx="20" cy="12" r=".7"/><circle cx="53" cy="9" r=".7"/><circle cx="149" cy="11" r=".7"/></g><path d="M0 44 32 35 180 39v57H0Z" fill="#254c47"/><path d="m-10 46 47-14 153 7-44 18H-10Z" fill="#68e890" stroke="#b6ffd0" stroke-width="1.4" filter="url(#buildGlow)"/><path d="M-10 46h156l44-7v57H-10Z" fill="url(#buildField)"/><path d="m-10 54 40-12m9 12 41-12m9 12 41-12m9 12 41-12m-163 34 39-12m10 12 40-12m9 12 41-12m9 12 40-12" stroke="#91f5a5" stroke-width=".8" opacity=".5"/><path d="m23 48 13-4m17 5 8-3m41 8 7-3m25 0 13-4m-108 30 12-4m20 4 9-3m42 3 12-4" stroke="#d3ffb9" stroke-width=".9" opacity=".7"/><path d="M0 46h145l35-7" fill="none" stroke="#bdffe1" stroke-width=".8" opacity=".8"/></svg>
+              <span class="choice-index" aria-hidden="true">03 / CREATE</span><span class="choice-copy"><span class="choice-title">Track Builder</span><span class="choice-subtitle">DESIGN A COURSE</span></span>
+            </button>
+            <button class="menu-choice" type="button" data-menu-choice="communityTracks" aria-pressed="false">
+              <svg class="choice-image" viewBox="0 0 180 96" aria-hidden="true"><defs><linearGradient id="cmSky" x2="0" y2="1"><stop stop-color="#081229"/><stop offset="1" stop-color="#17374e"/></linearGradient><linearGradient id="cmGrass" x2="0" y2="1"><stop stop-color="#49d98b"/><stop offset="1" stop-color="#167456"/></linearGradient><linearGradient id="cmEdge" x2="0" y2="1"><stop stop-color="#173c43"/><stop offset="1" stop-color="#091b28"/></linearGradient><filter id="cmGlow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="180" height="96" fill="url(#cmSky)"/><g fill="#d9f9ff" opacity=".7"><circle cx="18" cy="13" r=".8"/><circle cx="57" cy="8" r=".7"/><circle cx="133" cy="13" r=".8"/><circle cx="166" cy="8" r=".7"/></g><path d="m-8 57 71-28 127 22-78 38Z" fill="url(#cmEdge)" stroke="#53eaff" stroke-width="1.3" filter="url(#cmGlow)"/><path d="M-8 57 112 89l78-38v45H-8Z" fill="#091522"/><path d="m1 57 62-23 112 19-67 31Z" fill="url(#cmGrass)" stroke="#a0ffd4" stroke-width=".7"/><path d="m22 57 41-15 75 13-44 19Z" fill="none" stroke="#f4fff9" stroke-width="1.2" stroke-dasharray="2 2"/><path d="m29 51 7 2v10l-7-2Zm19-7 7 2v10l-7-2Zm20-5 7 2v10l-7-2Zm30 6 7 2v10l-7-2Zm20 4 7 2v10l-7-2Zm20 4 7 2v10l-7-2Z" fill="none" stroke="#f6fbff" stroke-width="1.3"/><path d="M29 51v10m27-15v10m19-15v10m37 2v10m20-6v10m27-6v10" stroke="#ff6bc7" stroke-width="1"/><path d="m78 54 15 4m-15-4 3-7m12 11 4-6m-4 6 7 4" stroke="#4af0ff" stroke-width="1"/><g transform="translate(93 42)"><path d="M-6 3-3-2 0-3l3 2 4 3-2 3-4-2-5 2Z" fill="#e8f8ff" stroke="#48eaff" stroke-width="1"/><path d="M-3-1-7-5m8 2 4-5m-8 10-4 4m11-4 5 4" stroke="#b6ffff" stroke-width="1.2"/><circle cx="-7" cy="-5" r="1.7" fill="#48eaff"/><circle cx="5" cy="-8" r="1.7" fill="#ff69c8"/></g></svg>
+              <span class="choice-index" aria-hidden="true">04 / COMMUNITY</span><span class="choice-copy"><span class="choice-title">Community Tracks</span><span class="choice-subtitle">EXPLORE PILOT BUILDS</span></span>
+            </button>
+          </div>
+
+          <section class="content-panel track-picker-panel" data-panel="trackPicker" aria-labelledby="trackPickerTitle" hidden>
+            <header class="track-picker-heading">
+              <div><span class="panel-overline">FLIGHT SETUP / 01</span><h2 id="trackPickerTitle">Choose your course</h2><p>Choose a course and line up your next run.</p></div>
+              <span id="trackPickerMark" class="track-picker-mark" aria-hidden="true">00 <i>/ 00</i></span>
+            </header>
+            <div class="track-picker-preview map-select" aria-hidden="false">
+              <div id="mapThumb" class="map-thumb" data-biome="neon-docks"><div class="map-thumb-grid"></div><div class="map-mini-warehouse"></div><canvas id="trackPreviewCanvas" class="track-route-preview" role="img" aria-label="Selected track route preview"></canvas><span class="map-thumb-label">AF / 01</span></div>
+              <div class="map-info"><span id="biomeOverline" class="map-overline">SKY PLATFORM</span><strong id="biomeName">Sky Platform</strong><span id="biomeDescription" class="map-description">A grass flight deck beneath a field of stars</span><div class="track-preview-course"><span>SELECTED COURSE</span><strong id="trackPreviewName">No track selected</strong><small id="trackPreviewGateCount">NO ROUTE AVAILABLE</small></div></div>
+            </div>
+            <div class="track-quick-selects">
+              <input id="biomeSelect" type="hidden" value="neon-docks" />
+              <label class="quick-select" for="trackSelect"><span>TRACK</span><select id="trackSelect" aria-label="Choose a track" disabled><option value="">No tracks available</option></select></label>
+            </div>
+            <p id="trackPickerEmptyMessage" class="track-picker-empty-message">No built-in tracks are available on the Sky Platform yet. Build a course in Track Builder, then add it to the game catalog.</p>
+            <footer class="track-picker-footer"><span><i></i> SELECTION SAVES AS YOU GO</span><button id="trackPickerDone" type="button" disabled>START FLIGHT <b aria-hidden="true">→</b></button></footer>
+          </section>
+
+          <section class="content-panel community-tracks-panel" data-panel="communityTracks" aria-labelledby="communityTracksTitle" hidden>
+            <div class="community-tracks-heading">
+              <div><span class="panel-overline">COMMUNITY FLIGHT LIBRARY</span><h2 id="communityTracksTitle">Choose a track</h2></div>
+              <span class="community-track-count" id="communityTrackCount">00 COURSES</span>
+            </div>
+            <p class="community-tracks-intro">Search by track name or game mode. Newest uploads appear first.</p>
+            <div class="community-track-tabs" role="tablist" aria-label="Community track lists">
+              <button id="communityAllTracksTab" class="community-track-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="communityTrackGrid">ALL TRACKS</button>
+              <button id="communityFavoriteTracksTab" class="community-track-tab" type="button" role="tab" aria-selected="false" aria-controls="communityTrackGrid">FAVORITES <span id="communityFavoriteCount">0</span></button>
+            </div>
+            <div class="community-track-filters">
+              <label for="communityTrackSearch"><span>TRACK NAME</span><input id="communityTrackSearch" type="search" autocomplete="off" placeholder="Search tracks" /></label>
+              <input id="communityTrackEnvironment" type="hidden" value="all" />
+              <label for="communityTrackMode"><span>GAME MODE</span><select id="communityTrackMode"><option value="all">All game modes</option><option value="4v4">4v4</option><option value="relay-race">Relay</option><option value="prop-hunt">Prop Hunt</option></select></label>
+            </div>
+            <p id="communityTrackEmpty" class="community-track-empty" role="status" hidden></p>
+            <div id="communityTrackGrid" class="community-track-grid" aria-label="Available community tracks"></div>
+          </section>
+
+          <section class="content-panel multiplayer-dashboard" data-panel="multiplayer" aria-labelledby="multiTitle" hidden>
+            <header class="multiplayer-header">
+              <div class="multiplayer-title-lockup"><span class="multiplayer-emblem" aria-hidden="true">XS</span><div><span class="multiplayer-kicker">XSPEC / NETWORK</span><h2 id="multiTitle">Find a match</h2><p>Choose a queue and jump into the next race.</p></div></div>
+              <div id="lobbyConnectionStatus" class="multiplayer-online-status"><i></i><span>READY</span></div>
+            </header>
+            <div class="multiplayer-region-bar">
+              <div class="multiplayer-actions"><button id="quickMatchButton" type="button">FIND MATCH</button><button id="hostMatchButton" type="button" aria-expanded="false" aria-controls="serverSetupForm">HOST MATCH</button></div>
+            </div>
+            <div class="multiplayer-workspace">
+              <section class="game-mode-select" aria-labelledby="gameModeTitle">
+                <header class="server-section-heading"><div><span class="panel-overline">FLIGHT QUEUE</span><h3 id="gameModeTitle">Select a game mode</h3></div><span class="server-capacity-note">4 MODES</span></header>
+                <div class="game-mode-grid" role="group" aria-label="Choose a multiplayer game mode">
+                  <button class="game-mode-card is-locked" type="button" data-game-mode="competitive-4v4" aria-label="Tournament. Locked until an event is scheduled." aria-disabled="true" aria-pressed="false" title="Tournament mode is locked until a future tournament is scheduled." disabled>
+                    <svg class="game-mode-art" viewBox="0 0 320 148" aria-hidden="true">
+                      <defs><linearGradient id="compSky" x2="0" y2="1"><stop stop-color="#102b55"/><stop offset="1" stop-color="#48a8c4"/></linearGradient><linearGradient id="compTrack" x2="0" y2="1"><stop stop-color="#1e5272"/><stop offset="1" stop-color="#071624"/></linearGradient></defs>
+                      <path fill="url(#compSky)" d="M0 0h320v148H0z"/><circle cx="262" cy="31" r="17" fill="#d8f9ff" opacity=".72"/>
+                      <path fill="#142943" d="m0 83 25-30 25 23 28-45 25 49 25-33 29 37 31-45 24 39 32-29 40 37v62H0z"/>
+                      <path fill="#1a3447" d="M15 82h33V45h8v37h25V58h10v24h25V38h9v44h25V51h8v31h22V43h11v39h32V60h8v22h38v66H15z" opacity=".9"/>
+                      <path fill="url(#compTrack)" d="M0 103h320v45H0z"/><path fill="none" stroke="#4de7ff" stroke-width="2" d="M0 110h320M48 122h225"/>
+                      <path fill="none" stroke="#f8fdff" stroke-width="5" d="M59 102V70a12 12 0 0 1 24 0v32M237 102V70a12 12 0 0 1 24 0v32"/><path fill="none" stroke="#ff5c8d" stroke-width="2" d="M59 70a12 12 0 0 1 24 0M237 70a12 12 0 0 1 24 0"/>
+                      <path fill="#fc527e" d="M15 131h30v5H15zM275 131h30v5h-30z"/><path fill="#48ddff" d="M45 131h30v5H45zM245 131h30v5h-30z"/>
+                    </svg>
+                    <span class="game-mode-card-copy"><small>LOCKED / NO EVENT</small><strong>Tournament</strong></span><i class="game-mode-lock" aria-hidden="true">LOCKED</i><i class="game-mode-check" aria-hidden="true">✓</i>
+                  </button>
+                  <button class="game-mode-card is-selected" type="button" data-game-mode="4v4" aria-pressed="true">
+                    <svg class="game-mode-art" viewBox="0 0 320 148" aria-hidden="true">
+                      <defs><linearGradient id="teamSky" x2="0" y2="1"><stop stop-color="#1f4c6d"/><stop offset="1" stop-color="#a1d8d5"/></linearGradient><linearGradient id="teamGround" x2="0" y2="1"><stop stop-color="#4a8880"/><stop offset="1" stop-color="#102d38"/></linearGradient></defs>
+                      <path fill="url(#teamSky)" d="M0 0h320v148H0z"/><circle cx="271" cy="29" r="16" fill="#fff2c6" opacity=".86"/>
+                      <path fill="#355867" d="m0 96 43-43 31 31 42-52 38 48 35-36 34 42 38-50 59 57v52H0z"/><path fill="url(#teamGround)" d="M0 101q67-19 139 0t181-1v48H0z"/>
+                      <path fill="none" stroke="#7ef2d2" stroke-width="3" d="M0 108q67-19 139 0t181-1"/><path fill="#233944" d="M0 125q72-19 142 0t178 0v23H0z"/>
+                      <path fill="none" stroke="#e9fdff" stroke-width="5" d="M52 113V77a13 13 0 0 1 26 0v36M141 113V61a13 13 0 0 1 26 0v52M242 113V75a13 13 0 0 1 26 0v38"/><path fill="none" stroke="#ffb764" stroke-width="2" d="M52 77a13 13 0 0 1 26 0M141 61a13 13 0 0 1 26 0M242 75a13 13 0 0 1 26 0"/>
+                      <path fill="#d5f9ff" d="m98 82 9-6 9 6-9 6zM202 94l8-6 9 6-9 6z"/><circle cx="107" cy="82" r="3" fill="#45e7ff"/><circle cx="210" cy="94" r="3" fill="#ff9a50"/>
+                    </svg>
+                    <span class="game-mode-card-copy"><small>TEAM RACE</small><strong>4v4</strong></span><i class="game-mode-check" aria-hidden="true">✓</i>
+                  </button>
+                  <button class="game-mode-card" type="button" data-game-mode="relay-race" aria-pressed="false">
+                    <svg class="game-mode-art" viewBox="0 0 320 148" aria-hidden="true">
+                      <defs><linearGradient id="relaySky" x2="0" y2="1"><stop stop-color="#2c315e"/><stop offset="1" stop-color="#e68980"/></linearGradient><linearGradient id="relayRoad" x2="0" y2="1"><stop stop-color="#45556c"/><stop offset="1" stop-color="#101a2b"/></linearGradient></defs>
+                      <path fill="url(#relaySky)" d="M0 0h320v148H0z"/><circle cx="257" cy="34" r="19" fill="#ffd8b3" opacity=".72"/>
+                      <path fill="#282c50" d="m0 91 34-45 28 37 41-56 29 53 37-39 31 43 42-57 38 58 40-34v97H0z"/><path fill="#36485b" d="M0 102h320v46H0z"/>
+                      <path fill="url(#relayRoad)" d="M96 148 135 99h53l45 49z"/><path fill="none" stroke="#ffb463" stroke-width="3" d="M122 148 145 99M199 99l27 49"/><path fill="none" stroke="#e8f7ff" stroke-width="2" stroke-dasharray="7 7" d="M163 111v8m0 9v8m0 8v4"/>
+                      <path fill="none" stroke="#f3fcff" stroke-width="5" d="M63 103V68a12 12 0 0 1 24 0v35M145 101V53a12 12 0 0 1 24 0v48M232 103V65a12 12 0 0 1 24 0v38"/><path fill="none" stroke="#ffb35d" stroke-width="2" d="M63 68a12 12 0 0 1 24 0M145 53a12 12 0 0 1 24 0M232 65a12 12 0 0 1 24 0"/>
+                      <path fill="#79edff" d="M15 126h39v4H15zM266 126h39v4h-39z"/><path fill="#ffca82" d="M43 126h11v4H43zM266 126h11v4h-11z"/>
+                    </svg>
+                    <span class="game-mode-card-copy"><small>TEAM CHECKPOINTS</small><strong>Relay Race</strong></span><i class="game-mode-check" aria-hidden="true">✓</i>
+                  </button>
+                  <button class="game-mode-card" type="button" data-game-mode="prop-hunt" aria-pressed="false">
+                    <svg class="game-mode-art" viewBox="0 0 320 148" aria-hidden="true">
+                      <defs><linearGradient id="huntRoom" x2="0" y2="1"><stop stop-color="#172640"/><stop offset="1" stop-color="#496475"/></linearGradient><linearGradient id="huntFloor" x2="0" y2="1"><stop stop-color="#324852"/><stop offset="1" stop-color="#0a1721"/></linearGradient></defs>
+                      <path fill="url(#huntRoom)" d="M0 0h320v148H0z"/><path fill="#102031" d="M24 14h272v91H24z"/><path fill="#233e50" d="M38 26h68v65H38zM119 26h68v65h-68zM200 26h82v65h-82z"/><path fill="#3a6171" d="M47 35h51v4H47zM128 35h51v4h-51zM211 35h59v4h-59z"/>
+                      <path fill="url(#huntFloor)" d="M0 105h320v43H0z"/><path fill="#a16f45" d="M31 84h57v31H31zM41 72h51v13H41zM222 87h64v29h-64zM233 75h53v13h-53z"/><path fill="#d1995f" d="M36 84h47v4H36zM227 87h54v4h-54z"/>
+                      <path fill="none" stroke="#76e7ff" stroke-width="2" d="M145 108V76a13 13 0 0 1 26 0v32M145 76a13 13 0 0 1 26 0"/><path fill="none" stroke="#ff73cb" stroke-width="2" d="M145 76a13 13 0 0 1 26 0"/>
+                      <path fill="#101824" d="M184 99h18l9 7-9 7h-18l-8-7z"/><circle cx="185" cy="106" r="2" fill="#7feaff"/><circle cx="203" cy="106" r="2" fill="#ff7cce"/><path fill="none" stroke="#d6f7ff" stroke-width="2" stroke-linecap="round" d="M177 106h-8m42 0h8m-27-7v-5m6 5v-5"/>
+                      <path fill="#47e5ff" opacity=".72" d="M49 104h17v2H49zM254 105h18v2h-18z"/>
+                    </svg>
+                    <span class="game-mode-card-copy"><small>HIDE &amp; SEEK</small><strong>Prop Hunt</strong></span><i class="game-mode-check" aria-hidden="true">✓</i>
+                  </button>
+                </div>
+              </section>
+              <form id="serverSetupForm" class="custom-server-panel">
+                <header class="server-section-heading"><div><span class="panel-overline">HOST A MATCH</span><h3>Choose your course</h3></div><span class="public-server-chip"><i></i> INVITE CODE INCLUDED</span><button id="closeHostMatch" class="host-match-close" type="button">CLOSE</button></header>
+                <label class="server-field" for="customServerName"><span>SERVER NAME</span><input id="customServerName" type="text" maxlength="32" placeholder="Crew server" autocomplete="off" /></label>
+                <label class="server-field" for="serverVisibility"><span>WHO CAN JOIN?</span><select id="serverVisibility" required><option value="" selected disabled>Choose public or private</option><option value="public">Public / listed in match finder</option><option value="private">Private / invite code only</option></select></label>
+                <small class="server-visibility-hint">Either choice creates a shareable invite code.</small>
+                <div class="server-form-row">
+                  <input id="serverBiomeSelect" type="hidden" value="neon-docks" />
+                  <label class="server-field" for="serverTrackSelect"><span>TRACK</span><select id="serverTrackSelect" aria-label="Choose a server track"></select></label>
+                </div>
+                <label class="server-field" for="serverCapacity"><span>PILOT SLOTS</span><select id="serverCapacity"><option value="1">1 pilot</option><option value="2">2 pilots</option><option value="3">3 pilots</option><option value="4">4 pilots</option><option value="5">5 pilots</option><option value="6">6 pilots</option><option value="7">7 pilots</option><option value="8" selected>8 pilots</option></select></label>
+                <small id="serverCapacityHint" class="server-visibility-hint" hidden>Relay is a full 8-pilot match with two teams of four.</small>
+                <div class="track-source-control"><span>TRACK LIBRARY</span><div role="group" aria-label="Choose track library"><button class="track-source-button is-selected" type="button" data-server-track-source="game" aria-pressed="true">IN-GAME</button><button class="track-source-button" type="button" data-server-track-source="community" aria-pressed="false">COMMUNITY</button></div></div>
+                <div id="customServerTrackSummary" class="custom-track-summary"><span class="custom-track-symbol">◎</span><span><small>SELECTED COURSE</small><strong>Choose a track</strong></span><b>READY</b></div>
+                <button id="createLobbyButton" class="create-server-button" type="submit"><span>HOST &amp; OPEN MATCH</span><b aria-hidden="true">&rarr;</b></button>
+              </form>
+            </div>
+            <div class="multiplayer-lower-row">
+              <form id="joinLobbyForm" class="join-lobby-form"><label for="joinLobbyCode">JOIN WITH INVITE CODE</label><div><input id="joinLobbyCode" type="text" maxlength="6" minlength="6" pattern="[A-HJ-NP-Za-hj-np-z2-9]{6}" autocapitalize="characters" autocomplete="off" placeholder="ABC234" required /><button type="submit">JOIN SERVER</button></div></form>
+              <section id="partyControlPanel" class="multiplayer-party-control" aria-label="Current server lobby" hidden>
+                <div class="multiplayer-party-heading"><strong>YOUR LOBBY <small id="partyCount">1 / 8</small></strong><span id="partyState" class="party-state"><i></i><span>SERVER OPEN</span></span></div>
+                <div id="serverLobbyRoster" class="server-lobby-roster" aria-label="Server pilots"></div>
+                <div id="partyCodeRow" class="party-code-row"><span>INVITE CODE</span><strong id="partyInviteCode"></strong><button id="copyPartyCode" type="button">COPY</button></div>
+                <div class="multiplayer-party-actions"><button id="partyLeaveButton" type="button">LEAVE SERVER</button></div>
+              </section>
+            </div>
+            <p id="lobbyMessage" class="lobby-message" role="status" aria-live="polite"></p>
+          </section>
+          <section class="content-panel builder-editor" data-panel="builder" aria-labelledby="builderTitle" hidden>
+            <aside class="builder-sidebar">
+              <div class="builder-heading"><div><span class="panel-overline">COURSE DESIGN</span><h2 id="builderTitle">Build your line</h2><p>Select a 3D model on the right, then place its preview in the field.</p><span id="builderModeSummary" class="builder-mode-summary">SELECTED GAME MODE / 4V4</span></div><button id="builderBack" class="builder-close" type="button" aria-label="Back to menu">×</button></div>
+              <section class="builder-section">
+                <div class="builder-section-heading"><span>3D OBJECT LIBRARY</span><small id="gateCount">00 GATES / 00 OBJECTS</small></div>
+                <div id="builderRaceGateSection">
+                  <div class="builder-section-heading"><span>GATES &amp; RACE GRID</span><small>COURSE MARKERS</small></div>
+                  <div class="gate-library" role="group" aria-label="Neon and uploaded STL race gates">
+                  <button class="gate-type is-selected" type="button" data-gate-type="neon-square"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-square" aria-hidden="true"></canvas><span><b>Neon Square</b><small>LED frame gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-ladder"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-ladder" aria-hidden="true"></canvas><span><b>Neon Ladder</b><small>LED rung gates</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-flag"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-flag" aria-hidden="true"></canvas><span><b>Neon Flag</b><small>LED banner gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-hurdle"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-hurdle" aria-hidden="true"></canvas><span><b>Neon Hurdle</b><small>LED crossbar gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="single"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:single" aria-hidden="true"></canvas><span><b>Single / STL</b><small>Uploaded gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="ladder"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:ladder" aria-hidden="true"></canvas><span><b>Ladder / STL</b><small>Uploaded gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="flag"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:flag" aria-hidden="true"></canvas><span><b>Flag / STL</b><small>Uploaded gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="hurdle"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:hurdle" aria-hidden="true"></canvas><span><b>Hurdle / STL</b><small>Uploaded gate</small></span></button>
+                  <button class="gate-type" type="button" data-builder-prop="podium"><canvas class="gate-icon builder-model-preview" data-model-preview="prop:podium" aria-hidden="true"></canvas><span><b>Podium</b><small>Red launch stand · 8 required</small></span></button>
+                  <button class="gate-type" type="button" data-builder-prop="relay-podium-gate" hidden><canvas class="gate-icon builder-model-preview" data-model-preview="prop:relay-podium-gate" aria-hidden="true"></canvas><span><b>Relay Podium Gate</b><small>Combined station · exactly 4 required</small></span></button>
+                  </div>
+                </div>
+                <div id="builderPropSection">
+                  <div class="builder-section-heading builder-obstacle-heading"><span>PROPS &amp; ENVIRONMENT OBJECTS</span><small>50 NEW · SORTED BY TYPE</small></div>
+                  <div id="builderEnvironmentCatalog" class="builder-environment-catalog" role="group" aria-label="Categorized props, buildings, and environment objects"></div>
+                  <button id="restoreEnvironmentBuildings" class="builder-restore-buildings" type="button" hidden>RESTORE REMOVED MAP BUILDINGS</button>
+                </div>
+              </section>
+              <section class="builder-section builder-selection" id="gateInspector" hidden>
+                <div class="builder-section-heading"><span>SELECTED GATE</span><button id="deleteGate" class="builder-delete" type="button">DELETE</button></div>
+                <strong id="selectedGateName" class="selected-gate-name">Single gate</strong>
+                <label class="builder-select-label" for="gateRouteNumber">ROUTE NUMBER<input id="gateRouteNumber" type="number" min="1" max="80" step="1" value="1" /></label>
+                <label class="builder-role-toggle" for="gateStartFinish"><input id="gateStartFinish" type="checkbox" /><span><b>START / FINISH GATE</b><small>Launch through this gate, then return here to finish each lap.</small></span></label>
+                <label class="builder-select-label" for="gateColor">LED COLOR<select id="gateColor"><option value="cyan">Cyan</option><option value="coral">Pink</option><option value="lime">Lime</option><option value="orange">Orange</option><option value="violet">Violet</option></select></label>
+              </section>
+              <section class="builder-section builder-selection" id="propInspector" hidden>
+                <div class="builder-section-heading"><span>SELECTED OBJECT</span><button id="deleteBuilderProp" class="builder-delete" type="button">DELETE</button></div>
+                <strong id="selectedPropName" class="selected-gate-name">Environment object</strong>
+                <label id="builderLaunchPodiumOption" class="builder-role-toggle" for="builderPropLaunch" hidden><input id="builderPropLaunch" type="checkbox" /><span><b>PRIORITY GRID SLOT</b><small>Use this podium first for your own launch.</small></span></label>
+              </section>
+              <div class="builder-sidebar-foot"><span class="tiny-pip"></span><span id="builderSummary">0 custom gates placed</span></div>
+            </aside>
+            <div class="builder-canvas-hud" aria-live="polite"><span class="builder-placement-pip"></span><span id="builderPlacementStatus">PLACE / SINGLE</span><small>PLACE: CLICK · SELECT + MOVE · DELETE: BACKSPACE · COPY / PASTE: CTRL+C / CTRL+V · FREE MOVE: WASD/QE · ORBIT: DRAG FIELD · PAN: RIGHT-DRAG · ZOOM: SCROLL</small></div>
+            <div id="builderTransformToolbar" class="builder-transform-toolbar" aria-label="Object transform tools" hidden>
+              <span class="builder-transform-title">TRANSFORM</span>
+              <button type="button" data-transform-mode="translate" aria-label="Move object (G)">MOVE <kbd>G</kbd></button>
+              <i></i>
+              <button type="button" data-transform-axis="all" class="is-active" aria-label="Free axes">FREE</button>
+              <button type="button" data-transform-axis="x" aria-label="Constrain to X axis">X</button>
+              <button type="button" data-transform-axis="y" aria-label="Constrain to Y axis">Y</button>
+              <button type="button" data-transform-axis="z" aria-label="Constrain to Z axis">Z</button>
+              <i></i>
+              <button type="button" data-transform-space="world" class="is-active">WORLD</button>
+              <button type="button" data-transform-space="local">LOCAL</button>
+            </div>
+            <section id="builderSettingsDrawer" class="builder-settings-drawer" aria-labelledby="builderSettingsTitle" hidden>
+              <div class="builder-settings-header"><div><span id="builderSettingsTitle">TRACK &amp; ENVIRONMENT SETTINGS</span><small>COURSE OPTIONS</small></div><button id="builderSettingsClose" type="button" aria-label="Close track and environment settings">CLOSE</button></div>
+              <div class="builder-settings-content">
+                <section class="builder-section builder-course-save" aria-label="Save and publish this course">
+                  <div class="builder-section-heading"><span>TRACK SETTINGS</span><small>SAVE WHEN READY</small></div>
+                  <label class="builder-select-label" for="builderTrackName">TRACK NAME<input id="builderTrackName" type="text" maxlength="32" autocomplete="off" placeholder="My custom track" /></label>
+                  <label class="builder-select-label" for="builderLapCount">LAPS<select id="builderLapCount"><option value="1">1 lap</option><option value="2">2 laps</option><option value="3">3 laps</option><option value="4">4 laps</option><option value="5">5 laps</option></select></label>
+                  <div class="builder-saved-track-row">
+                    <label class="builder-select-label" for="builderSavedTrackSelect">SAVED TRACKS<select id="builderSavedTrackSelect"><option value="">No saved tracks</option></select></label>
+                    <button id="loadSavedBuilderTrack" class="builder-saved-track-action" type="button" disabled>LOAD</button>
+                    <button id="deleteSavedBuilderTrack" class="builder-saved-track-action" type="button" disabled>DELETE</button>
+                  </div>
+                  <button id="saveBuilderTrack" class="builder-publish-button" type="button">SAVE TRACK TO DEVICE</button>
+                  <p id="builderSaveMessage" class="builder-publish-message" role="status" aria-live="polite">Unsaved tracks are cleared when you leave the Builder.</p>
+                  <p class="builder-publish-message">Place 8 red podiums for the race grid. Mark the start / finish gate and add at least one numbered gate; the clock starts when a pilot lifts off.</p>
+                  <div class="builder-picture-row">
+                    <div class="builder-picture-preview"><img id="builderTrackPicturePreview" alt="Captured track preview" hidden /><span id="builderPicturePlaceholder">NO PICTURE YET</span></div>
+                    <button id="captureTrackPicture" class="builder-picture-button" type="button"><span aria-hidden="true">◉</span> TAKE TRACK PICTURE</button>
+                  </div>
+                  <button id="publishCommunityTrack" class="builder-publish-button" type="button" disabled>UPLOAD TO COMMUNITY</button>
+                  <p id="builderPublishMessage" class="builder-publish-message" role="status" aria-live="polite">A viable track needs 8 red podiums, a start / finish gate, and at least one numbered gate. Add a name and capture a view to upload.</p>
+                </section>
+                <details class="builder-section builder-environment" open>
+                  <summary class="builder-section-heading"><span>WORLD CONDITIONS</span><small>SKY PLATFORM <b aria-hidden="true">⌄</b></small></summary>
+                  <div class="builder-environment-controls">
+                    <input id="builderBiomeSelect" type="hidden" value="neon-docks" />
+                    <p class="builder-environment-note">These conditions apply to your track preview and are saved separately from the menu.</p>
+                    <label class="builder-slider-label" for="environmentTime"><span>TIME OF DAY <output id="environmentTimeValue">14:00</output></span><input id="environmentTime" type="range" min="0" max="23" value="14" /></label>
+                    <label class="builder-select-label" for="environmentWeather">WEATHER<select id="environmentWeather"><option value="clear">Clear</option><option value="mist">Mist</option><option value="dust">Haze</option></select></label>
+                    <label class="builder-slider-label" for="environmentFog"><span>FOG DISTANCE <output id="environmentFogValue">560 m</output></span><input id="environmentFog" type="range" min="100" max="800" step="10" value="560" /></label>
+                    <label class="builder-slider-label" for="environmentBrightness"><span>LIGHTING <output id="environmentBrightnessValue">100%</output></span><input id="environmentBrightness" type="range" min="50" max="150" step="5" value="100" /></label>
+                  </div>
+                </details>
+              </div>
+            </section>
+            <div class="builder-toolbar">
+              <button id="undoGate" class="button-quiet" type="button">UNDO</button>
+              <button id="builderSettingsToggle" class="button-quiet builder-settings-toggle" type="button" aria-controls="builderSettingsDrawer" aria-expanded="false">SETTINGS</button>
+              <button id="testTrack" class="button-primary" type="button"><span>TEST COURSE</span><b>→</b><i></i></button>
+            </div>
+          </section>
+
+          <section class="content-panel builder-quick-panel" data-panel="builderMenu" aria-label="Track builder" hidden>
+            <span class="quick-panel-label">DESIGN A COURSE</span>
+            <p>Choose a game mode before opening the course editor.</p>
+            <input id="builderLaunchBiome" type="hidden" value="neon-docks" />
+            <label class="builder-launch-environment" for="builderLaunchMode">GAME MODE<select id="builderLaunchMode"><option value="4v4">4v4</option><option value="relay-race">Relay</option><option value="prop-hunt">Prop Hunt</option></select></label>
+            <button id="openTrackBuilder" class="builder-menu-open" type="button">OPEN TRACK BUILDER <b aria-hidden="true">↗</b></button>
+          </section>
+
+          <section class="content-panel" data-panel="settings" aria-labelledby="settingsTitle" hidden>
+            <header class="settings-header">
+              <div class="settings-title-lockup">
+                <span class="settings-emblem" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 12.5h18a4 4 0 0 1 3.9 4.9l-1.3 5.2a3 3 0 0 1-4.8 1.6l-4-3.2h-5.6l-4 3.2a3 3 0 0 1-4.8-1.6l-1.3-5.2A4 4 0 0 1 7 12.5Z"/><path d="M10 16.5v5m-2.5-2.5h5M21 17h.1m3 3h.1"/></svg></span>
+                <div><span class="settings-brandline">XSPEC / FLIGHT SYSTEMS</span><h2 id="settingsTitle">Flight settings</h2><p>Tune your controls, camera, graphics and audio.</p></div>
+              </div>
+              <div class="settings-header-actions"><span class="settings-profile-pill"><i></i><span>LOCAL PROFILE</span><b>ACTIVE</b></span><button id="settingsMenuButton" class="settings-menu-button" type="button">MAIN MENU</button><button id="closeSettingsPanel" class="settings-close" type="button" aria-label="Close settings" title="Close settings"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 4 12 12M16 4 4 16"/></svg></button></div>
+            </header>
+            <section id="settingsPartyInvite" class="settings-party-invite" aria-label="Multiplayer lobby invite code" hidden>
+              <div><span>LOBBY INVITE / SHARE WITH PILOTS</span><strong id="settingsPartyInviteCode"></strong></div>
+              <button id="copySettingsPartyCode" type="button">COPY CODE</button>
+            </section>
+            <div class="settings-body">
+              <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+                <button id="settingsControlsTab" class="settings-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="settingsControlsPanel" data-settings-tab="controls">
+                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9h12a3 3 0 0 1 2.9 3.7l-1 4a2.3 2.3 0 0 1-3.7 1.2L13 15.5h-2l-3.2 2.4a2.3 2.3 0 0 1-3.7-1.2l-1-4A3 3 0 0 1 6 9Z"/><path d="M7.5 11.5v4m-2-2h4m7-1h.1m2 2h.1"/></svg></span>
+                  <span class="settings-tab-copy"><strong>INPUT &amp; CONTROLS</strong><small>Transmitter, mapping, rates</small></span><b class="settings-tab-index">01</b>
+                </button>
+                <button id="settingsCameraTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsCameraPanel" data-settings-tab="camera">
+                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 7.5h4l1.6-2h5.8l1.6 2h4v12h-17z"/><circle cx="12" cy="13.5" r="4"/><path d="M18 10h.1"/></svg></span>
+                  <span class="settings-tab-copy"><strong>CAMERA &amp; GRAPHICS</strong><small>View, quality, flight HUD</small></span><b class="settings-tab-index">02</b>
+                </button>
+                <button id="settingsAudioTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsAudioPanel" data-settings-tab="audio">
+                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4h3l5 4V6l-5 4H4Z"/><path d="M16 9a5 5 0 0 1 0 6m2.5-8.5a8.5 8.5 0 0 1 0 11"/></svg></span>
+                  <span class="settings-tab-copy"><strong>AUDIO</strong><small>Motor and checkpoint sound</small></span><b class="settings-tab-index">03</b>
+                </button>
+              </div>
+              <div class="settings-content-area">
+            <section id="settingsControlsPanel" class="settings-subpanel is-active" role="tabpanel" aria-labelledby="settingsControlsTab" data-settings-content="controls">
+              <div class="device-grid">
+                <article class="device-card">
+                  <div class="device-card-top"><span class="device-kind"><i class="connection-led" id="gamepadLed"></i> USB / BLUETOOTH</span><span class="device-state" id="gamepadStatus">SEARCHING</span></div>
+                  <div class="device-title-row"><div><h3>Gamepad or transmitter</h3><p>Xbox, PlayStation, USB HID and radio joysticks.</p></div><span class="device-icon">⌗</span></div>
+                  <label class="device-select-label" for="gamepadSelect">ACTIVE CONTROLLER</label>
+                  <div class="device-select-row"><select id="gamepadSelect" aria-label="Select active controller"><option value="">No controller detected</option></select><button id="scanGamepads" class="small-outline-button" type="button">RESCAN</button></div>
+                  <div class="device-detail" id="gamepadDetail">Connect a controller, then move a stick or press a button.</div>
+                </article>
+                <article class="device-card serial-card">
+                  <div class="device-card-top"><span class="device-kind"><i class="connection-led" id="serialLed"></i> USB UART / CRSF</span><span class="device-state" id="serialStatus">OPTIONAL</span></div>
+                  <div class="device-title-row"><div><h3>RC receiver over serial</h3><p>Read CRSF channels from a compatible USB serial adapter.</p></div><span class="device-icon serial-icon">⌁</span></div>
+                  <div class="serial-actions"><button id="connectSerial" class="small-outline-button serial-connect" type="button">CONNECT TRANSMITTER</button><button id="disconnectSerial" class="small-outline-button" type="button" hidden>DISCONNECT</button><span class="serial-rate">420,000 · 8N1</span></div>
+                  <div class="device-detail" id="serialDetail">Chrome or Edge on localhost / HTTPS. Use a compatible CRSF UART adapter.</div>
+                </article>
+              </div>
+
+              <section class="race-restart-settings" aria-labelledby="raceRestartSettingsTitle">
+                <div class="race-restart-settings-copy"><span class="panel-overline">RACE CONTROLS</span><strong id="raceRestartSettingsTitle">Restart race</strong><p>Press R during a solo race, or bind a controller button or CRSF AUX switch.</p></div>
+                <div class="race-restart-options">
+                  <button id="bindRaceRestartButton" class="small-outline-button" type="button">BIND CONTROLLER BUTTON</button>
+                  <label for="restartCrsfChannel"><span>CRSF AUX SWITCH</span><select id="restartCrsfChannel" aria-label="CRSF switch to restart the race"><option value="-1">Not bound</option><option value="4">AUX 1 / CH 5</option><option value="5">AUX 2 / CH 6</option><option value="6">AUX 3 / CH 7</option><option value="7">AUX 4 / CH 8</option><option value="8">AUX 5 / CH 9</option><option value="9">AUX 6 / CH 10</option><option value="10">AUX 7 / CH 11</option><option value="11">AUX 8 / CH 12</option><option value="12">AUX 9 / CH 13</option><option value="13">AUX 10 / CH 14</option><option value="14">AUX 11 / CH 15</option><option value="15">AUX 12 / CH 16</option></select></label>
+                </div>
+                <small id="restartBindingStatus" role="status">R is always available. Optional bindings are saved on this device.</small>
+              </section>
+
+              <div class="mapping-header"><div><span class="panel-overline">STICK SETUP</span><strong>Map your channels</strong></div><button id="calibrateSticks" class="text-button" type="button">CALIBRATE CENTER</button></div>
+              <div class="axis-map">
+                <div class="axis-map-heading"><span>FLIGHT AXIS</span><span>GAMEPAD AXIS</span><span>REVERSE</span><span>LIVE</span></div>
+                <label class="axis-row" for="mapYaw"><span class="axis-name"><b>01</b> YAW</span><select id="mapYaw" data-axis-map="yaw"><option value="0">Axis 1 · Left X</option><option value="1">Axis 2 · Left Y</option><option value="2">Axis 3 · Right X</option><option value="3">Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="yaw" aria-label="Reverse yaw axis" /><span class="axis-meter"><i data-axis-meter="yaw"></i></span></label>
+                <label class="axis-row" for="mapThrottle"><span class="axis-name"><b>02</b> THROTTLE</span><select id="mapThrottle" data-axis-map="throttle"><option value="0">Axis 1 · Left X</option><option value="1" selected>Axis 2 · Left Y</option><option value="2">Axis 3 · Right X</option><option value="3">Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="throttle" aria-label="Reverse throttle axis" checked /><span class="axis-meter"><i data-axis-meter="throttle"></i></span></label>
+                <label class="axis-row" for="mapRoll"><span class="axis-name"><b>03</b> ROLL</span><select id="mapRoll" data-axis-map="roll"><option value="0">Axis 1 · Left X</option><option value="1">Axis 2 · Left Y</option><option value="2" selected>Axis 3 · Right X</option><option value="3">Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="roll" aria-label="Reverse roll axis" checked /><span class="axis-meter"><i data-axis-meter="roll"></i></span></label>
+                <label class="axis-row" for="mapPitch"><span class="axis-name"><b>04</b> PITCH</span><select id="mapPitch" data-axis-map="pitch"><option value="0">Axis 1 · Left X</option><option value="1">Axis 2 · Left Y</option><option value="2">Axis 3 · Right X</option><option value="3" selected>Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="pitch" aria-label="Reverse pitch axis" checked /><span class="axis-meter"><i data-axis-meter="pitch"></i></span></label>
+              </div>
+              <div class="crsf-order-row"><span>CRSF RECEIVER CHANNEL ORDER</span><select id="crsfOrder"><option value="AETR">AETR · Roll / Pitch / Throttle / Yaw</option><option value="TAER">TAER · Throttle / Roll / Pitch / Yaw</option></select></div>
+              <section class="rate-setup" aria-label="Flight rate settings">
+                <div class="rate-setup-heading">
+                  <div><span class="panel-overline">FLIGHT FEEL</span><strong>Rates</strong></div>
+                  <label class="rate-type-label" for="rateTypeSelect"><span>RATE STYLE</span><select id="rateTypeSelect"><option value="betaflight">Betaflight rates (default)</option><option value="actual">Actual rates</option></select></label>
+                </div>
+                <p id="rateModeHelp" class="rate-mode-help">Classic Betaflight RC rate and super rate. This is the default rate style.</p>
+                <div class="rate-axis-grid">
+                  <article class="rate-axis-card" data-rate-axis="roll">
+                    <header><b>ROLL</b><output data-rate-summary="roll">200 / 667 °/s</output></header>
+                    <label><span data-rate-label="primary">RC RATE</span><output data-rate-value="primary">1.00</output><input type="range" data-rate-input="primary" min="0.1" max="2.55" step="0.05" /></label>
+                    <label><span data-rate-label="secondary">SUPER RATE</span><output data-rate-value="secondary">70%</output><input type="range" data-rate-input="secondary" min="0" max="1" step="0.05" /></label>
+                    <label><span>EXPO</span><output data-rate-value="expo">0%</output><input type="range" data-rate-input="expo" min="0" max="1" step="0.05" /></label>
+                  </article>
+                  <article class="rate-axis-card" data-rate-axis="pitch">
+                    <header><b>PITCH</b><output data-rate-summary="pitch">200 / 667 °/s</output></header>
+                    <label><span data-rate-label="primary">RC RATE</span><output data-rate-value="primary">1.00</output><input type="range" data-rate-input="primary" min="0.1" max="2.55" step="0.05" /></label>
+                    <label><span data-rate-label="secondary">SUPER RATE</span><output data-rate-value="secondary">70%</output><input type="range" data-rate-input="secondary" min="0" max="1" step="0.05" /></label>
+                    <label><span>EXPO</span><output data-rate-value="expo">0%</output><input type="range" data-rate-input="expo" min="0" max="1" step="0.05" /></label>
+                  </article>
+                  <article class="rate-axis-card" data-rate-axis="yaw">
+                    <header><b>YAW</b><output data-rate-summary="yaw">200 / 667 °/s</output></header>
+                    <label><span data-rate-label="primary">RC RATE</span><output data-rate-value="primary">1.00</output><input type="range" data-rate-input="primary" min="0.1" max="2.55" step="0.05" /></label>
+                    <label><span data-rate-label="secondary">SUPER RATE</span><output data-rate-value="secondary">70%</output><input type="range" data-rate-input="secondary" min="0" max="1" step="0.05" /></label>
+                    <label><span>EXPO</span><output data-rate-value="expo">0%</output><input type="range" data-rate-input="expo" min="0" max="1" step="0.05" /></label>
+                  </article>
+                </div>
+                <div class="rate-reset-row"><span>ROLL, PITCH AND YAW ARE TUNED SEPARATELY</span><button id="resetRates" class="text-button" type="button">RESET THIS RATE STYLE</button></div>
+              </section>
+              <div class="input-tuning">
+                <label for="deadzoneRange"><span>STICK DEAD ZONE</span><input id="deadzoneRange" type="range" min="0" max="0.2" step="0.01" value="0.06" /><output id="deadzoneValue">6%</output></label>
+                <div class="keyboard-note"><span class="tiny-pip"></span> KEYBOARD BACKUP <small>W/S pitch · A/D roll · Q/E yaw · Space/C throttle</small></div>
+              </div>
+              <div class="controls-foot"><span><span class="tiny-pip"></span> INPUT PROFILE SAVED ON THIS DEVICE</span><span id="inputSourceLabel">ACTIVE INPUT / KEYBOARD</span></div>
+            </section>
+            <section id="settingsCameraPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsCameraTab" data-settings-content="camera" hidden>
+              <div class="settings-list">
+                <label class="setting-row" for="fovRange"><span><strong>Camera field of view</strong><small>Wider view, more speed</small></span><input id="fovRange" type="range" min="85" max="130" value="108" /><output id="fovValue">108°</output></label>
+                <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="45" value="22" /><output id="angleValue">22°</output></label>
+                <label class="setting-row" for="qualitySelect"><span><strong>Render quality</strong><small>Adjust resolution for your display</small></span><select id="qualitySelect"><option value="1">Performance</option><option value="1.35">Balanced</option><option value="1.8" selected>High</option></select></label>
+                <label class="setting-row" for="droneNeonColor"><span><strong>Drone LED color</strong><small>Glow color for the arms and LEDs</small></span><input id="droneNeonColor" type="color" value="#52e8ff" /><output id="droneNeonColorValue">#52E8FF</output></label>
+                <label class="setting-row" for="droneBodyColor"><span><strong>Drone center body</strong><small>Change the blue body panels; windshield stays black</small></span><input id="droneBodyColor" type="color" value="#45dfff" /><output id="droneBodyColorValue">#45DFFF</output></label>
+                <label class="setting-row" for="dronePropColor"><span><strong>Propeller color</strong><small>Color all four propellers</small></span><input id="dronePropColor" type="color" value="#45dfff" /><output id="dronePropColorValue">#45DFFF</output></label>
+                <div class="setting-row"><span><strong>Flight HUD</strong><small>Speed, altitude and throttle</small></span><button id="hudToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
+                <div class="setting-row"><span><strong>Motion vignette</strong><small>Subtle edge shade while flying</small></span><button id="vignetteToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
+              </div>
+              <div class="settings-bottom"><span><span class="tiny-pip"></span> SETTINGS SAVED ON THIS DEVICE</span><button id="resetSettings" class="text-button" type="button">RESET DEFAULTS</button></div>
+            </section>
+            <section id="settingsAudioPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsAudioTab" data-settings-content="audio" hidden>
+              <div class="settings-list">
+                <div class="setting-row">
+                  <span><strong>Flight audio</strong><small>Motor and checkpoint effects</small></span>
+                  <span></span>
+                  <button id="soundToggle" class="switch" type="button" role="switch" aria-checked="false"><i></i><span>OFF</span></button>
+                </div>
+                <label class="setting-row" for="audioVolumeRange"><span><strong>Master volume</strong><small>Set the level for flight audio</small></span><input id="audioVolumeRange" type="range" min="0" max="100" value="100" /><output id="audioVolumeValue">100%</output></label>
+              </div>
+              <div class="settings-bottom"><span><span class="tiny-pip"></span> AUDIO SETTINGS SAVED ON THIS DEVICE</span><button id="resetAudioSettings" class="text-button" type="button">RESET AUDIO</button></div>
+            </section>
+              </div>
+            </div>
+          </section>
+
+          <div class="stage-bottom"><span><b class="stage-bottom-pip"></b> <span id="fieldStatusLabel">FIELD SITE 01 / READY</span></span><span>DRAG THE WORLD TO LOOK AROUND <b>↗</b></span></div>
+        </section>
+
+        <aside class="world-annotation" aria-hidden="true"><span class="annotation-line"></span><span class="annotation-dot"></span><div><b id="annotationName">NEON DOCKS</b><small id="annotationSite">NIGHT CIRCUIT / 01</small></div></aside>
+        <div class="right-stamp" aria-hidden="true"><span>ALT</span><b>04</b><i></i><span>AGL</span></div>
+
+        <div id="podiumInviteLayer" class="podium-invite-layer" aria-label="Invite friends to empty podiums">
+          <button class="podium-invite-button" data-podium-slot="1" type="button" aria-label="Invite a friend to podium 2" title="Invite a friend"><span>+</span></button>
+          <button class="podium-invite-button" data-podium-slot="2" type="button" aria-label="Invite a friend to podium 3" title="Invite a friend"><span>+</span></button>
+          <button class="podium-invite-button" data-podium-slot="3" type="button" aria-label="Invite a friend to podium 4" title="Invite a friend"><span>+</span></button>
+        </div>
+      </section>
+
+      <div class="arena-markers" aria-label="Course edit shortcuts">
+        <button class="arena-marker marker-left" type="button" data-open-builder aria-label="Open track builder">+</button>
+        <button class="arena-marker marker-center" type="button" data-open-builder aria-label="Open track builder">+</button>
+        <button class="arena-marker marker-right" type="button" data-open-builder aria-label="Open track builder">+</button>
+      </div>
+      <div class="pilot-badge"><span id="pilotBadgeInitial">•</span><div><strong id="pilotBadgeName">GUEST PILOT</strong><small id="pilotBadgeState">SIGN IN TO SAVE FLIGHTS</small></div></div>
+
+      <section id="flightHud" class="flight-hud" hidden>
+        <div class="hud-top"><button id="exitFlight" class="hud-back" type="button"><span>←</span> EXIT FLIGHT <kbd>ESC</kbd></button><div class="hud-center-tag"><span class="status-pip"></span> TEST FLIGHT <i>/</i> <span id="flightModeLabel">FREE FLIGHT</span></div><div class="hud-field-tag"><span>INPUT / <b id="flightInputLabel">KEYBOARD</b></span><span>FIELD / <b id="flightFieldLabel">NEON DOCKS</b></span></div></div>
+        <div id="courseProgress" class="course-progress" aria-live="polite" hidden><span id="courseProgressName">COURSE</span><b id="courseProgressCount">1 / 6</b></div>
+        <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b><small id="raceRestartHint" class="race-restart-hint" hidden>R / RESTART</small></div>
+        <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
+        <aside id="relayRaceTiming" class="relay-race-timing" aria-label="Relay team splits and lap times" hidden><span class="race-leaderboard-heading">TEAM RELAY / LAP TIMES</span><div id="relayRaceTeams"></div></aside>
+        <div id="raceStartOverlay" class="race-start-overlay" role="status" aria-live="assertive" hidden><span id="raceStartLabel">RACE STARTS IN</span><strong id="raceStartNumber">5</strong><small id="raceStartDetail">HOLD POSITION ON THE PODIUM</small></div>
+        <div class="flight-reticle" aria-hidden="true"><i></i><b></b><i></i><em></em></div>
+        <div class="hud-left"><div class="hud-readout"><span>GROUND SPEED</span><strong><b id="speedValue">0</b><small> KM/H</small></strong></div><div class="hud-readout"><span>ALTITUDE</span><strong><b id="altitudeValue">4.0</b><small> M</small></strong></div></div>
+        <div class="hud-right"><div class="throttle-label"><span>THROTTLE</span><b id="throttleValue">54%</b></div><div class="throttle-track"><i id="throttleBar"></i></div><div class="throttle-markers"><span>0</span><span>100</span></div></div>
+        <div class="flight-bottom"><div class="flight-prompt"><span class="flight-bottom-dot"></span><span id="flightPrompt">NO CLOCK. FIND YOUR FLOW.</span></div><div class="flight-controls"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> PITCH / ROLL</span><span><kbd>Q</kbd><kbd>E</kbd> YAW</span><span><kbd>SPACE</kbd><kbd>C</kbd> THROTTLE</span></div><div class="hud-fps"><b id="fpsValue">60</b><span>FPS</span></div></div>
+      </section>
+
+      <div id="flightCameraQuickControls" class="flight-camera-quick-controls" hidden>
+        <button id="flightCameraToggle" class="flight-camera-toggle" type="button" aria-expanded="false" aria-controls="flightCameraPanel">CAMERA SETTINGS</button>
+        <section id="flightCameraPanel" class="flight-camera-panel" aria-label="Live camera settings" hidden>
+          <header><strong>LIVE CAMERA</strong><small>CHANGES APPLY IMMEDIATELY</small></header>
+          <label for="flightFovRange"><span>FIELD OF VIEW <output id="flightFovValue">108°</output></span><input id="flightFovRange" type="range" min="85" max="130" value="108" /></label>
+          <label for="flightAngleRange"><span>CAMERA ANGLE <output id="flightAngleValue">22°</output></span><input id="flightAngleRange" type="range" min="5" max="45" value="22" /></label>
+        </section>
+      </div>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <section id="authModal" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="authHeading" hidden>
+        <div class="auth-card">
+          <button id="authClose" class="auth-close" type="button" aria-label="Close account window">×</button>
+          <span class="auth-kicker"><i></i> XSPEC PILOT ACCOUNT</span>
+          <div id="authForms">
+            <h2 id="authHeading">Sign in or create account</h2>
+            <p id="authDescription" class="auth-description">Enter your email and we’ll send a secure sign-in code. New pilots choose a username after verifying.</p>
+            <form id="authEmailForm" class="auth-form">
+              <label for="authEmail">EMAIL ADDRESS</label>
+              <input id="authEmail" type="email" name="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required />
+              <button id="sendAuthCode" class="auth-submit" type="submit"><span>EMAIL ME A SIGN-IN CODE</span><b>→</b></button>
+            </form>
+            <form id="authCodeForm" class="auth-form" hidden>
+              <p class="auth-code-destination">Enter the 6-digit code sent to <strong id="authEmailTarget"></strong>.</p>
+              <label for="authCode">EMAIL CODE</label>
+              <input id="authCode" type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" required />
+              <button id="verifyAuthCode" class="auth-submit" type="submit"><span>VERIFY &amp; CONTINUE</span><b>→</b></button>
+              <div class="auth-code-actions"><button id="changeAuthEmail" type="button">CHANGE EMAIL</button><button id="resendAuthCode" type="button">RESEND CODE</button></div>
+            </form>
+            <form id="authUsernameForm" class="auth-form" hidden>
+              <p class="auth-code-destination">Email verified. Choose the username pilots will see in the lobby.</p>
+              <label for="authUsername">PILOT USERNAME</label>
+              <input id="authUsername" type="text" name="username" autocomplete="nickname" autocapitalize="none" spellcheck="false" minlength="3" maxlength="20" pattern="[A-Za-z0-9_]{3,20}" placeholder="NightRacer" required />
+              <small>3-20 letters, numbers, or underscores. Offensive, explicit, hateful, or staff impersonation names are blocked.</small>
+              <button id="completeAuthSignup" class="auth-submit" type="submit"><span>CREATE PILOT ACCOUNT</span><b>→</b></button>
+              <div class="auth-code-actions"><button id="backToAuthEmail" type="button">START OVER</button></div>
+            </form>
+          </div>
+          <div id="authAccountDetails" class="auth-account-details" hidden>
+            <h2>You’re signed in</h2>
+            <p id="authSignedInName" class="auth-description"></p>
+            <p id="authSignedInEmail" class="auth-description"></p>
+            <button id="signOutButton" class="auth-secondary" type="button">SIGN OUT</button>
+          </div>
+          <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
+          <small class="auth-footnote">Codes expire after 10 minutes. Never share a sign-in code.</small>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
