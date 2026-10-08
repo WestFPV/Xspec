@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -2722,29 +2721,20 @@ function createGateIndicator(gate) {
 }
 
 const gateTypes = {
-  'neon-square': { name: 'Neon Square', format: 'procedural', raceAsset: true },
-  'neon-ladder': { name: 'Neon Ladder', format: 'procedural', raceAsset: true },
-  'neon-flag': { name: 'Neon Flag', format: 'procedural', raceAsset: true },
-  'neon-hurdle': { name: 'Neon Hurdle', format: 'procedural', raceAsset: true },
-  single: { name: 'Single', model: '/models/gates/single.stl', format: 'stl', raceAsset: true },
-  corkscrew: { name: 'Corkscrew', model: '/models/gates/corkscrew.glb' },
-  ladder: { name: 'Ladder', model: '/models/gates/ladder.stl', format: 'stl', raceAsset: true },
-  dive: { name: 'Dive', model: '/models/gates/dive.glb' },
-  flag: { name: 'Flag', model: '/models/gates/flag.stl', format: 'stl', raceAsset: true },
-  hurdle: { name: 'Hurdle', model: '/models/gates/hurdle.stl', format: 'stl', raceAsset: true },
+  'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', raceAsset: true },
+  'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', raceAsset: true },
+  'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', raceAsset: true },
+  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true },
 };
 
 function createProceduralGate(type, hue = 'cyan') {
   const group = new THREE.Group();
   const accent = colors[hue] ?? colors.cyan;
   const led = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.35, metalness: 0.16, emissive: accent, emissiveIntensity: 1.3, toneMapped: false });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x172131, roughness: 0.48, metalness: 0.45 });
-  const flagMat = new THREE.MeshBasicMaterial({ color: accent, side: THREE.DoubleSide });
   const ring = (parent, radius, position, rotation = [0, 0, 0], material = led) => {
     const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.14, 8, 36), material);
     mesh.position.set(...position); mesh.rotation.set(...rotation); parent.add(mesh); return mesh;
   };
-  const post = (parent, x, height, z = 0, material = led, width = 0.18) => box(parent, [width, height, width], [x, height / 2, z], material);
 
   if (type === 'neon-square') {
     const frameMaterial = led;
@@ -2763,45 +2753,25 @@ function createProceduralGate(type, hue = 'cyan') {
     addFrameBar(barSize, frameHeight, frameWidth / 2, frameHeight / 2);
     addFrameBar(frameWidth + barSize, barSize, 0, frameHeight);
     addFrameBar(frameWidth + barSize, barSize, 0, 0);
-  } else if (type === 'single') {
-    ring(group, 2.55, [0, 2.65, 0]);
-    post(group, -2.87, 2.65); post(group, 2.87, 2.65);
-    box(group, [6.4, 0.14, 0.82], [0, 0.08, 0], dark);
-  } else if (type === 'corkscrew') {
-    for (let i = 0; i < 6; i += 1) {
-      const phase = i / 5;
-      ring(group, 1.6, [Math.sin(phase * Math.PI * 2) * 1.2, 2.1 + Math.sin(phase * Math.PI) * 1.1, -3.8 + i * 1.52], [0, (phase - 0.5) * 1.05, 0]);
-    }
-    post(group, -2.1, 1.6, -3.6, dark); post(group, 2.1, 1.6, 3.5, dark);
-  } else if (type === 'ladder' || type === 'neon-ladder') {
+  } else if (type === 'neon-ladder') {
     for (const x of [-1.55, 1.55]) box(group, [0.18, 0.18, 7.2], [x, 2.1, 0], led);
     for (let i = 0; i < 5; i += 1) {
       const z = -3 + i * 1.5; const y = 0.95 + i * 0.58;
       box(group, [3.35, 0.13, 0.16], [0, y, z], led);
-      if (type === 'neon-ladder') ring(group, 1.05, [0, y + 0.72, z], [0, 0, 0]);
+      ring(group, 1.05, [0, y + 0.72, z], [0, 0, 0]);
     }
-    post(group, -1.65, 0.9, -3.5, dark); post(group, 1.65, 0.9, -3.5, dark);
-  } else if (type === 'dive') {
-    ring(group, 2.0, [0, 2.35, 0], [-0.48, 0, 0]);
-    ring(group, 1.5, [0, 1.2, -3.8], [-0.18, 0, 0]);
-    post(group, -2.2, 2.2, 0); post(group, 2.2, 2.2, 0);
-    box(group, [0.13, 0.13, 4.4], [0, 3.95, -1.8], led);
-  } else if (type === 'flag' || type === 'neon-flag') {
-    post(group, -3.0, 6.0, 0, led, 0.16); post(group, 3.0, 6.0, 0, led, 0.16);
-    box(group, [6.2, 0.16, 0.16], [0, 5.85, 0], type === 'neon-flag' ? led : dark);
-    const banner = new THREE.Mesh(new THREE.PlaneGeometry(4.3, 1.8), flagMat);
-    banner.position.set(-0.55, 4.75, 0.04); group.add(banner);
-    if (type === 'neon-flag') {
-      box(group, [4.5, 0.12, 0.12], [-0.55, 3.83, 0.08], led);
-      box(group, [0.12, 1.8, 0.12], [-2.8, 4.75, 0.08], led);
-      box(group, [0.12, 1.8, 0.12], [1.7, 4.75, 0.08], led);
-    }
-    box(group, [6.8, 0.14, 0.82], [0, 0.08, 0], dark);
-  } else if (type === 'hurdle' || type === 'neon-hurdle') {
-    post(group, -2.7, 2.35, 0, led, 0.24); post(group, 2.7, 2.35, 0, led, 0.24);
+  } else if (type === 'neon-flag') {
+    box(group, [0.16, 6.0, 0.16], [-3.0, 3.0, 0], led);
+    box(group, [0.16, 6.0, 0.16], [3.0, 3.0, 0], led);
+    box(group, [6.2, 0.16, 0.16], [0, 5.85, 0], led);
+    box(group, [4.5, 0.12, 0.12], [-0.55, 3.83, 0.08], led);
+    box(group, [0.12, 1.8, 0.12], [-2.8, 4.75, 0.08], led);
+    box(group, [0.12, 1.8, 0.12], [1.7, 4.75, 0.08], led);
+  } else if (type === 'neon-hurdle') {
+    box(group, [0.24, 2.35, 0.24], [-2.7, 1.175, 0], led);
+    box(group, [0.24, 2.35, 0.24], [2.7, 1.175, 0], led);
     box(group, [5.55, 0.34, 0.42], [0, 2.12, 0], led);
-    box(group, [6.25, 0.14, 0.86], [0, 0.08, 0], dark);
-    for (let i = 0; i < 7; i += 1) box(group, [0.14, 0.36, 0.46], [-2.35 + i * 0.78, 2.12, 0.02], type === 'neon-hurdle' ? led : dark);
+    for (let i = 0; i < 7; i += 1) box(group, [0.14, 0.36, 0.46], [-2.35 + i * 0.78, 2.12, 0.02], led);
   }
   group.traverse((node) => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } });
   group.userData.proceduralGate = true;
@@ -3490,7 +3460,7 @@ function drawFallbackBuilderPreview(canvas, type) {
   if (type.startsWith('gate:')) {
     const gateType = type.slice(5);
     context.strokeRect(42, 12, 44, 45);
-    if (gateType === 'ladder' || gateType === 'corkscrew') {
+    if (gateType === 'neon-ladder') {
       context.beginPath(); context.moveTo(42, 27); context.lineTo(86, 27); context.moveTo(42, 42); context.lineTo(86, 42); context.stroke();
     }
   } else {
@@ -3555,173 +3525,44 @@ function renderBuilderModelPreviews() {
       }
     }
   } catch {
-    canvases.forEach((canvas) => drawFallbackBuilderPreview(canvas, canvas.dataset.modelPreview || 'gate:single'));
+    canvases.forEach((canvas) => drawFallbackBuilderPreview(canvas, canvas.dataset.modelPreview || 'gate:neon-square'));
   }
-}
-
-function addGateLedBar(parent, size, position, material) {
-  const led = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
-  led.position.set(...position);
-  led.renderOrder = 3;
-  led.userData.skipShadows = true;
-  led.userData.isGateLed = true;
-  parent.add(led);
-  return led;
-}
-
-function addInsideGateLeds(group, centerX, width, bottom, height) {
-  const material = new THREE.MeshBasicMaterial({ color: 0x52eaff, toneMapped: false });
-  const innerWidth = Math.max(0.2, width - 0.34);
-  const innerHeight = Math.max(0.2, height - 0.34);
-  const x = centerX;
-  const y = bottom + height / 2;
-  const z = 0.04;
-  const thickness = 0.026;
-  addGateLedBar(group, [innerWidth, thickness, 0.025], [x, y - innerHeight / 2, z], material);
-  addGateLedBar(group, [innerWidth, thickness, 0.025], [x, y + innerHeight / 2, z], material);
-  addGateLedBar(group, [thickness, innerHeight, 0.025], [x - innerWidth / 2, y, z], material);
-  addGateLedBar(group, [thickness, innerHeight, 0.025], [x + innerWidth / 2, y, z], material);
-}
-
-function addImportedGateLeds(group, type, dimensions) {
-  const { width, height } = dimensions;
-  if (type === 'single') {
-    addInsideGateLeds(group, 0, width, 0, height);
-  } else if (type === 'ladder') {
-    const openingWidth = width / 2;
-    addInsideGateLeds(group, -openingWidth / 2, openingWidth, 0, height);
-    addInsideGateLeds(group, openingWidth / 2, openingWidth, 0, height);
-  } else if (type === 'flag') {
-    const diode = new THREE.MeshBasicMaterial({ color: 0x52eaff, toneMapped: false });
-    const poleStrip = new THREE.Mesh(new THREE.BoxGeometry(0.028, height - 0.04, 0.026), diode);
-    poleStrip.position.set(0.035, height / 2, 0.04);
-    poleStrip.renderOrder = 3;
-    poleStrip.userData.skipShadows = true;
-    poleStrip.userData.isGateLed = true;
-    group.add(poleStrip);
-  }
-}
-
-function createImportedSTLGate(type, sourceGeometry) {
-  const geometry = sourceGeometry.clone();
-  sourceGeometry.dispose();
-  geometry.computeBoundingBox();
-  const bounds = geometry.boundingBox;
-  if (!bounds || bounds.isEmpty()) return null;
-
-  const sourceMin = bounds.min.clone();
-  const sourceMax = bounds.max.clone();
-  const sourceSize = bounds.getSize(new THREE.Vector3());
-  const positions = geometry.attributes.position;
-  const colorArray = new Float32Array(positions.count * 3);
-  let scale = 1;
-  let dimensions = { width: 1, height: 1 };
-
-  if (type === 'single' || type === 'ladder') {
-    scale = (type === 'single' ? 6.0 : 4.7) / sourceSize.y;
-    dimensions = { width: sourceSize.z * scale, height: sourceSize.y * scale };
-    for (let i = 0; i < positions.count; i += 1) {
-      const sourceX = positions.getX(i);
-      const sourceY = positions.getY(i);
-      const sourceZ = positions.getZ(i);
-      positions.setXYZ(i,
-        (sourceZ - (sourceMin.z + sourceMax.z) / 2) * scale,
-        (sourceY - sourceMin.y) * scale,
-        (sourceX - (sourceMin.x + sourceMax.x) / 2) * scale);
-    }
-  } else if (type === 'flag') {
-    scale = 6.0 / sourceSize.z;
-    dimensions = { width: sourceSize.y * scale, height: sourceSize.z * scale };
-    for (let i = 0; i < positions.count; i += 1) {
-      const sourceX = positions.getX(i);
-      const sourceY = positions.getY(i);
-      const sourceZ = positions.getZ(i);
-      positions.setXYZ(i,
-        (sourceY - sourceMin.y) * scale,
-        (sourceZ - sourceMin.z) * scale,
-        (sourceX - (sourceMin.x + sourceMax.x) / 2) * scale);
-    }
-  } else if (type === 'hurdle') {
-    scale = 3.5 / sourceSize.z;
-    dimensions = { width: sourceSize.y * scale, height: sourceSize.z * scale };
-    for (let i = 0; i < positions.count; i += 1) {
-      const sourceX = positions.getX(i);
-      const sourceY = positions.getY(i);
-      const sourceZ = positions.getZ(i);
-      positions.setXYZ(i,
-        (sourceY - (sourceMin.y + sourceMax.y) / 2) * scale,
-        (sourceZ - sourceMin.z) * scale,
-        (sourceX - (sourceMin.x + sourceMax.x) / 2) * scale);
-    }
-  } else {
-    scale = 1.8 / sourceSize.y;
-    dimensions = { width: sourceSize.z * scale, height: sourceSize.y * scale };
-    for (let i = 0; i < positions.count; i += 1) {
-      const sourceX = positions.getX(i);
-      const sourceY = positions.getY(i);
-      const sourceZ = positions.getZ(i);
-      positions.setXYZ(i,
-        (sourceX - (sourceMin.x + sourceMax.x) / 2) * scale,
-        (sourceY - sourceMin.y) * scale,
-        (sourceZ - (sourceMin.z + sourceMax.z) / 2) * scale);
-    }
-  }
-
-  const blue = [0.12, 0.38, 0.92];
-  const white = [0.92, 0.96, 1];
-  for (let i = 0; i < positions.count; i += 3) {
-    let accent = false;
-    if (type === 'single') {
-      const centerY = (geometry.attributes.position.getY(i) + geometry.attributes.position.getY(i + 1) + geometry.attributes.position.getY(i + 2)) / 3;
-      accent = centerY < 0.24 || centerY > dimensions.height - 0.24;
-    } else if (type === 'ladder') {
-      const centerY = (geometry.attributes.position.getY(i) + geometry.attributes.position.getY(i + 1) + geometry.attributes.position.getY(i + 2)) / 3;
-      const centerX = (geometry.attributes.position.getX(i) + geometry.attributes.position.getX(i + 1) + geometry.attributes.position.getX(i + 2)) / 3;
-      accent = centerY < 0.24 || centerY > dimensions.height - 0.24 || Math.abs(centerX) < 0.08;
-    } else if (type === 'flag') {
-      const centerX = (geometry.attributes.position.getX(i) + geometry.attributes.position.getX(i + 1) + geometry.attributes.position.getX(i + 2)) / 3;
-      accent = centerX > 0.06;
-    } else {
-      const centerY = (geometry.attributes.position.getY(i) + geometry.attributes.position.getY(i + 1) + geometry.attributes.position.getY(i + 2)) / 3;
-      accent = centerY > dimensions.height * 0.88;
-    }
-    const tint = accent ? blue : white;
-    for (let vertex = 0; vertex < 3; vertex += 1) {
-      const offset = (i + vertex) * 3;
-      colorArray[offset] = tint[0];
-      colorArray[offset + 1] = tint[1];
-      colorArray[offset + 2] = tint[2];
-    }
-  }
-
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArray, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.38, metalness: 0.18, side: THREE.DoubleSide });
-  const body = new THREE.Mesh(geometry, bodyMaterial);
-  body.castShadow = true;
-  body.receiveShadow = true;
-  const group = new THREE.Group();
-  group.add(body);
-  addImportedGateLeds(group, type, dimensions);
-  group.userData.importedGate = true;
-  return group;
 }
 
 function loadGateModel(type) {
   if (!gateModelCache.has(type)) {
     const config = gateTypes[type];
-    const promise = config.format === 'procedural'
-      ? Promise.resolve(null)
-      : config.format === 'stl'
-      ? new STLLoader().loadAsync(config.model).then((geometry) => createImportedSTLGate(type, geometry)).catch(() => null)
-      : fetch(config.model, { method: 'HEAD' }).then(async (response) => {
-        if (!response.ok) return null;
-        const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-        gateModelLoader ??= new GLTFLoader();
-        return new Promise((resolve) => gateModelLoader.load(config.model, (gltf) => resolve(gltf.scene), undefined, () => resolve(null)));
-      }).catch(() => null);
+    const promise = fetch(config.model, { method: 'HEAD' }).then(async (response) => {
+      if (!response.ok) return null;
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      gateModelLoader ??= new GLTFLoader();
+      return new Promise((resolve) => gateModelLoader.load(config.model, (gltf) => {
+        const bounds = new THREE.Box3().setFromObject(gltf.scene);
+        if (bounds.isEmpty()) {
+          resolve(null);
+          return;
+        }
+        const center = bounds.getCenter(new THREE.Vector3());
+        const normalized = new THREE.Group();
+        normalized.position.set(-center.x, -bounds.min.y, -center.z);
+        normalized.add(gltf.scene);
+        normalized.userData.importedGate = true;
+        normalized.traverse((node) => {
+          if (!node.isMesh) return;
+          node.material = new THREE.MeshStandardMaterial({
+            color: 0x52eaff,
+            emissive: 0x0aa9c4,
+            emissiveIntensity: 1.25,
+            metalness: 0.24,
+            roughness: 0.34,
+            toneMapped: false,
+            side: THREE.DoubleSide,
+          });
+          node.userData.isGateLed = true;
+        });
+        resolve(normalized);
+      }, undefined, () => resolve(null)));
+    }).catch(() => null);
     gateModelCache.set(type, promise);
   }
   return gateModelCache.get(type);
@@ -3782,7 +3623,7 @@ function updateBuilderGateBadge(gate, data) {
   texture.colorSpace = THREE.SRGBColorSpace;
   const badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }));
   badge.scale.set(isStartFinish ? 2.8 : 2.2, 1.1, 1);
-  badge.position.set(0, data.type === 'neon-square' ? 7.6 : 6.35, 0);
+  badge.position.set(0, 7.35, 0);
   badge.renderOrder = 8;
   badge.userData.isBuilderGateBadge = true;
   badge.visible = currentPage === 'builder' && !flying;
@@ -7251,6 +7092,46 @@ let friendsPollTimer = 0;
 let friendsData = { friends: [], incomingRequests: [], outgoingRequests: [], onlineCount: 0 };
 let currentTeam = null;
 
+function recentPilotsStorageKey() {
+  return signedInUser?.id ? `xspec-recent-pilots-${signedInUser.id}` : '';
+}
+
+function getRecentPilots() {
+  const key = recentPilotsStorageKey();
+  if (!key) return [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(saved)
+      ? saved.filter((pilot) => pilot && typeof pilot.username === 'string' && pilot.username.trim())
+        .slice(0, 8)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRecentPartyPilots(lobby) {
+  const key = recentPilotsStorageKey();
+  if (!key || !Array.isArray(lobby?.members)) return;
+  const recent = getRecentPilots();
+  const previous = JSON.stringify(recent);
+  const usernameKey = signedInUser?.username?.toLowerCase();
+  const next = lobby.members
+    .filter((member) => member.id !== signedInUser?.id && member.username?.toLowerCase() !== usernameKey)
+    .map((member) => ({ username: member.username.trim() }))
+    .filter((member) => member.username)
+    .concat(recent)
+    .filter((pilot, index, pilots) => pilots.findIndex((candidate) => candidate.username.toLowerCase() === pilot.username.toLowerCase()) === index)
+    .slice(0, 8);
+  if (JSON.stringify(next) === previous) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(next));
+    if (!document.querySelector('#friendsPanel').hidden) updateFriendsUI();
+  } catch {
+    // Recent pilot history is optional and remains available for this session.
+  }
+}
+
 function syncWorldMode() {
   const menuScene = !flying && currentPage !== 'builder';
   const environmentOverview = menuScene && currentPage === 'trackPicker';
@@ -8111,7 +7992,7 @@ function addFriendsEmpty(list, message) {
   list.append(empty);
 }
 
-function makeFriendsRow(pilot, { online = false, actions = [] } = {}) {
+function makeFriendsRow(pilot, { online = false, actions = [], statusLabel = '' } = {}) {
   const row = document.createElement('div');
   row.className = `friends-row${online ? '' : ' is-offline'}`;
   const avatar = document.createElement('span');
@@ -8126,19 +8007,22 @@ function makeFriendsRow(pilot, { online = false, actions = [] } = {}) {
   const username = document.createElement('strong');
   username.textContent = pilot.username || 'Pilot';
   const status = document.createElement('small');
-  status.textContent = online ? 'ONLINE NOW' : 'OFFLINE';
+  status.textContent = statusLabel || (online ? 'ONLINE NOW' : 'OFFLINE');
   copy.append(username, status);
 
   row.append(avatar, copy);
   if (actions.length) {
     const actionWrap = document.createElement('span');
     actionWrap.className = actions.length > 1 ? 'friends-row-actions' : '';
-    actions.forEach(({ label, endpoint, payload, className = '' }) => {
+    actions.forEach(({ label, endpoint, payload, className = '', onClick }) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `friends-row-action ${className}`.trim();
       button.textContent = label;
-      button.addEventListener('click', () => { void runFriendsAction(endpoint, payload, button); });
+      button.addEventListener('click', () => {
+        if (onClick) onClick(button);
+        else void runFriendsAction(endpoint, payload, button);
+      });
       actionWrap.append(button);
     });
     row.append(actionWrap);
@@ -8159,7 +8043,7 @@ function makeFriendRequestRow(request, direction) {
 }
 
 function updateFriendsUI(data = friendsData) {
-  friendsData = data || { friends: [], incomingRequests: [], outgoingRequests: [], onlineCount: 0 };
+  friendsData = data || { friends: [], incomingRequests: [], outgoingRequests: [], partyInvites: [], onlineCount: 0 };
   const onlineCount = Number(friendsData.onlineCount) || 0;
   document.querySelector('#onlineFriendCount').textContent = String(onlineCount);
   document.querySelector('#panelOnlineFriendCount').textContent = String(onlineCount);
@@ -8170,22 +8054,58 @@ function updateFriendsUI(data = friendsData) {
   const offlineFriends = (friendsData.friends || []).filter((friend) => !friend.online);
   const incomingRequests = friendsData.incomingRequests || [];
   const outgoingRequests = friendsData.outgoingRequests || [];
+  const partyInvites = friendsData.partyInvites || [];
   const onlineList = document.querySelector('#onlineFriendList');
   const offlineList = document.querySelector('#offlineFriendList');
   const requestList = document.querySelector('#friendRequestList');
   const outgoingList = document.querySelector('#outgoingFriendList');
+  const recentList = document.querySelector('#recentPilotsList');
+  const recentPilots = getRecentPilots().filter((pilot) => pilot.username.toLowerCase() !== signedInUser?.username?.toLowerCase());
+  const friendNames = new Set((friendsData.friends || []).map((friend) => friend.username.toLowerCase()));
+  const pendingNames = new Set(outgoingRequests.map((request) => request.username.toLowerCase()));
   onlineList.replaceChildren();
   offlineList.replaceChildren();
   requestList.replaceChildren();
   outgoingList.replaceChildren();
-  if (onlineFriends.length) onlineFriends.forEach((friend) => onlineList.append(makeFriendsRow(friend, { online: true, actions: [{ label: 'REMOVE', endpoint: 'remove', payload: { friendId: friend.id } }] })));
+  recentList.replaceChildren();
+  document.querySelector('#partyInviteList').replaceChildren();
+  if (onlineFriends.length) onlineFriends.forEach((friend) => onlineList.append(makeFriendsRow(friend, { online: true, actions: [
+    { label: 'INVITE', className: 'is-accept', onClick: (button) => { void sendPartyInvite(friend, button); } },
+    { label: 'REMOVE', endpoint: 'remove', payload: { friendId: friend.id } },
+  ] })));
   else addFriendsEmpty(onlineList, signedInUser ? 'No friends online right now.' : 'Sign in to see your friends online.');
-  if (offlineFriends.length) offlineFriends.forEach((friend) => offlineList.append(makeFriendsRow(friend, { actions: [{ label: 'REMOVE', endpoint: 'remove', payload: { friendId: friend.id } }] })));
+  const nonFriendRecentPilots = recentPilots.filter((pilot) => !friendNames.has(pilot.username.toLowerCase()));
+  if (nonFriendRecentPilots.length) {
+    nonFriendRecentPilots.forEach((pilot) => {
+      const actions = pendingNames.has(pilot.username.toLowerCase())
+        ? []
+        : [{ label: 'ADD', endpoint: 'request', payload: { username: pilot.username }, className: 'is-accept' }];
+      recentList.append(makeFriendsRow(pilot, { statusLabel: 'RECENT PILOT', actions }));
+    });
+  } else addFriendsEmpty(recentList, 'Pilots you share a party with will appear here.');
+  const inviteList = document.querySelector('#partyInviteList');
+  inviteList.replaceChildren();
+  if (partyInvites.length) {
+    partyInvites.forEach((invite) => {
+      inviteList.append(makeFriendsRow({ username: invite.inviter, statusLabel: `${invite.lobbyName} / ${invite.gameMode}` }, {
+        actions: [
+          { label: 'ACCEPT', className: 'is-accept', onClick: (button) => { void respondToPartyInvite(invite.inviteId, true, button); } },
+          { label: 'DECLINE', onClick: (button) => { void respondToPartyInvite(invite.inviteId, false, button); } },
+        ],
+      }));
+    });
+  } else addFriendsEmpty(inviteList, 'No game invites right now.');
+  document.querySelector('#partyInviteSectionCount').textContent = String(partyInvites.length);
+  if (offlineFriends.length) offlineFriends.forEach((friend) => offlineList.append(makeFriendsRow(friend, { actions: [
+    { label: 'INVITE', className: 'is-accept', onClick: (button) => { void sendPartyInvite(friend, button); } },
+    { label: 'REMOVE', endpoint: 'remove', payload: { friendId: friend.id } },
+  ] })));
   else addFriendsEmpty(offlineList, signedInUser ? 'No offline friends.' : 'Your friends list will appear here.');
   if (incomingRequests.length) incomingRequests.forEach((request) => requestList.append(makeFriendRequestRow(request, 'incoming')));
   else addFriendsEmpty(requestList, 'No new requests.');
   outgoingRequests.forEach((request) => outgoingList.append(makeFriendRequestRow(request, 'outgoing')));
   document.querySelector('#friendsOfflineSectionCount').textContent = String(offlineFriends.length);
+  document.querySelector('#recentPilotsSectionCount').textContent = String(nonFriendRecentPilots.length);
   document.querySelector('#friendsRequestSectionCount').textContent = String(incomingRequests.length);
   document.querySelector('.friends-pending-section').hidden = !signedInUser || outgoingRequests.length === 0;
   document.querySelector('#friendAddForm').hidden = !signedInUser;
@@ -8214,7 +8134,7 @@ function startFriendsPolling() {
 function stopFriendsPolling() {
   window.clearInterval(friendsPollTimer);
   friendsPollTimer = 0;
-  updateFriendsUI({ friends: [], incomingRequests: [], outgoingRequests: [], onlineCount: 0 });
+  updateFriendsUI({ friends: [], incomingRequests: [], outgoingRequests: [], partyInvites: [], onlineCount: 0 });
 }
 
 async function runFriendsAction(endpoint, payload, button = null) {
@@ -8232,21 +8152,59 @@ async function runFriendsAction(endpoint, payload, button = null) {
   }
 }
 
+async function sendPartyInvite(friend, button) {
+  if (!signedInUser) { openAuthModal('signin'); return; }
+  button.disabled = true;
+  setFriendsMessage(`Inviting ${friend.username}…`);
+  try {
+    const result = await lobbyRequest('invite', { friendId: friend.id });
+    setFriendsMessage(result.message || `Party invitation sent to ${friend.username}.`);
+    await refreshFriends();
+  } catch (error) {
+    setFriendsMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function respondToPartyInvite(inviteId, accept, button) {
+  if (!signedInUser) { openAuthModal('signin'); return; }
+  button.disabled = true;
+  setFriendsMessage(accept ? 'Joining party…' : 'Declining invitation…');
+  try {
+    const result = await lobbyRequest(accept ? 'invite/accept' : 'invite/decline', { inviteId });
+    if (accept) {
+      updatePartyLobby(result.lobby);
+      closeFriendsPanel();
+      enterPartyWaitingFlight();
+    } else {
+      await refreshFriends();
+      setFriendsMessage(result.message || 'Party invitation declined.');
+    }
+  } catch (error) {
+    setFriendsMessage(error.message, true);
+    await refreshFriends();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 const friendsButton = document.querySelector('#friendsButton');
 const friendsPanel = document.querySelector('#friendsPanel');
 function closeFriendsPanel() {
   friendsPanel.hidden = true;
   friendsButton.setAttribute('aria-expanded', 'false');
 }
+function openFriendsPanel() {
+  friendsPanel.hidden = false;
+  friendsButton.setAttribute('aria-expanded', 'true');
+  setFriendsMessage('');
+  if (signedInUser) void refreshFriends();
+  else document.querySelector('#friendsSignInButton').focus();
+}
 friendsButton.addEventListener('click', () => {
-  const opening = friendsPanel.hidden;
-  friendsPanel.hidden = !opening;
-  friendsButton.setAttribute('aria-expanded', String(opening));
-  if (opening) {
-    setFriendsMessage('');
-    if (signedInUser) void refreshFriends();
-    else document.querySelector('#friendsSignInButton').focus();
-  }
+  if (friendsPanel.hidden) openFriendsPanel();
+  else closeFriendsPanel();
 });
 document.querySelector('#friendsClose').addEventListener('click', closeFriendsPanel);
 document.querySelector('#friendsSignInButton').addEventListener('click', () => openAuthModal('signin'));
@@ -8358,6 +8316,7 @@ function updatePodiumInvitePositions() {
 
 function updatePartyUI(lobby = partyLobby) {
   partyLobby = lobby || null;
+  rememberRecentPartyPilots(partyLobby);
   if (!partyLobby || partyLobby.status !== 'open' || !partyLobby.results?.length) {
     lastSettledRaceProgressKey = '';
   } else {
@@ -9285,17 +9244,7 @@ document.querySelector('#joinLobbyForm').addEventListener('submit', (event) => {
   void joinFlightParty(document.querySelector('#joinLobbyCode').value.trim().toUpperCase());
 });
 document.querySelectorAll('[data-podium-slot]').forEach((button) => button.addEventListener('click', () => {
-  if (!signedInUser) {
-    openAuthModal('create');
-    return;
-  }
-  if (partyLobby) {
-    void copyPartyInvite();
-    return;
-  }
-  setPage('multiplayer');
-  setHostMatchOpen(true);
-  document.querySelector('#serverVisibility').focus();
+  openFriendsPanel();
 }));
 updatePartyUI(null);
 
@@ -10688,7 +10637,7 @@ function placeBuilderGate(position) {
     scaleX: 1,
     scaleY: 1,
     scaleZ: 1,
-    color: gateTypes[activeGateType].format === 'stl' ? 'cyan' : (palette[builderGates.length % palette.length] || 'cyan'),
+    color: palette[builderGates.length % palette.length] || 'cyan',
     isStartFinish: builderGates.length === 0,
     routeOrder: builderGates.length === 0 ? 0 : builderGates.filter((gate) => !gate.isStartFinish).length + 1,
   };
@@ -11542,7 +11491,14 @@ function restoreBuilder(savedTrack = null) {
     const savedY = Number(gate.y);
     return {
       id: gate.id || `legacy-${index}-${Date.now()}`,
-      type: gateTypes[gate.type] ? gate.type : 'single',
+      type: ({
+        single: 'neon-square',
+        ladder: 'neon-ladder',
+        flag: 'neon-flag',
+        hurdle: 'neon-hurdle',
+        corkscrew: 'neon-square',
+        dive: 'neon-ladder',
+      })[gate.type] || (gateTypes[gate.type] ? gate.type : 'neon-square'),
       x,
       y: Number.isFinite(savedY) && savedY !== 0 ? savedY : terrainSurfaceYAt(activeBiome, x, z),
       z,

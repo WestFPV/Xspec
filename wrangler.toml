@@ -3,6 +3,9 @@ main = "worker.mjs"
 compatibility_date = "2026-10-08"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+AUTH_FROM_EMAIL = "Admin@xspecsim.com"
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"

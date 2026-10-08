@@ -40,6 +40,7 @@ function normalizeStore(saved = {}) {
     lobbies: Array.isArray(saved.lobbies) ? saved.lobbies : [],
     friendships: Array.isArray(saved.friendships) ? saved.friendships.filter((friendship) => Array.isArray(friendship.userIds) && friendship.userIds.length === 2) : [],
     friendRequests: Array.isArray(saved.friendRequests) ? saved.friendRequests.filter((request) => request.id && request.fromUserId && request.toUserId) : [],
+    partyInvites: Array.isArray(saved.partyInvites) ? saved.partyInvites.filter((invite) => invite.id && invite.lobbyId && invite.fromUserId && invite.toUserId) : [],
     teams: Array.isArray(saved.teams) ? saved.teams.filter((team) => team.id && team.name && Array.isArray(team.members)) : [],
     communityTracks: Array.isArray(saved.communityTracks)
       ? saved.communityTracks
@@ -394,7 +395,17 @@ function friendSnapshot(userId) {
       return recipient ? { requestId: request.id, id: recipient.id, username: displayUsername(recipient.username) } : null;
     })
     .filter(Boolean);
-  return { friends, incomingRequests, outgoingRequests, onlineCount: friends.filter((friend) => friend.online).length };
+  const partyInvites = store.partyInvites
+    .filter((invite) => invite.toUserId === userId && invite.expiresAt > now)
+    .map((invite) => {
+      const inviter = store.users.find((candidate) => candidate.id === invite.fromUserId);
+      const lobby = store.lobbies.find((candidate) => candidate.id === invite.lobbyId && candidate.status === 'open');
+      return inviter && lobby
+        ? { inviteId: invite.id, inviter: displayUsername(inviter.username), lobbyName: lobby.serverName || `${displayUsername(inviter.username)}'s Party`, gameMode: lobby.gameMode || '4v4' }
+        : null;
+    })
+    .filter(Boolean);
+  return { friends, incomingRequests, outgoingRequests, partyInvites, onlineCount: friends.filter((friend) => friend.online).length };
 }
 
 async function handleFriends(request, response, url) {
@@ -1279,6 +1290,55 @@ async function handleLobby(request, response, url) {
     lobby.updatedAt = Date.now();
     if (!await persistLobby(response)) return;
     return json(response, 200, { lobby: publicLobby(lobby) });
+  }
+
+  if (url.pathname === '/api/lobby/invite') {
+    const friendId = typeof body.friendId === 'string' ? body.friendId : '';
+    const lobby = lobbyForUser(user.id);
+    if (!lobby || lobby.status !== 'open') return json(response, 409, { error: 'Create or join an open party before inviting friends.' });
+    if (!friendId || !usersAreFriends(user.id, friendId)) return json(response, 403, { error: 'You can invite only pilots on your friends list.' });
+    if (friendId === user.id) return json(response, 400, { error: 'You cannot invite yourself.' });
+    if (!allowRate(`party-invite:${user.id}`, 30, 10 * 60_000)) return json(response, 429, { error: 'Too many party invitations. Wait a little and try again.' });
+    if (lobby.members.length >= (lobby.maxPlayers || 8)) return json(response, 409, { error: 'Your party is full.' });
+    if (lobbyForUser(friendId)) return json(response, 409, { error: 'That friend is already in a party.' });
+    const now = Date.now();
+    store.partyInvites = store.partyInvites.filter((invite) => invite.toUserId !== friendId || invite.lobbyId !== lobby.id);
+    const invite = { id: randomUUID(), lobbyId: lobby.id, fromUserId: user.id, toUserId: friendId, createdAt: now, expiresAt: now + 30 * 60_000 };
+    store.partyInvites = store.partyInvites.filter((candidate) => candidate.expiresAt > now);
+    store.partyInvites.push(invite);
+    if (!await persistLobby(response)) return;
+    return json(response, 200, { message: 'Party invitation sent.' });
+  }
+
+  if (url.pathname === '/api/lobby/invite/accept' || url.pathname === '/api/lobby/invite/decline') {
+    const inviteId = typeof body.inviteId === 'string' ? body.inviteId : '';
+    const inviteIndex = store.partyInvites.findIndex((candidate) => candidate.id === inviteId && candidate.toUserId === user.id);
+    if (inviteIndex < 0) return json(response, 404, { error: 'That party invitation is no longer available.' });
+    const invite = store.partyInvites[inviteIndex];
+    const now = Date.now();
+    if (invite.expiresAt <= now) {
+      store.partyInvites.splice(inviteIndex, 1);
+      if (!await persistLobby(response)) return;
+      return json(response, 410, { error: 'That party invitation has expired.' });
+    }
+    if (url.pathname === '/api/lobby/invite/decline') {
+      store.partyInvites.splice(inviteIndex, 1);
+      if (!await persistLobby(response)) return;
+      return json(response, 200, { message: 'Party invitation declined.' });
+    }
+    const lobby = store.lobbies.find((candidate) => candidate.id === invite.lobbyId);
+    if (!lobby || lobby.status !== 'open') return json(response, 409, { error: 'That party is no longer open.' });
+    if (!lobbyHasCompatibleTrack(lobby)) return json(response, 409, { error: lobbyTrackModeError(lobby.gameMode || '4v4') });
+    if (lobby.members.length >= (lobby.maxPlayers || 8)) return json(response, 409, { error: 'That party is full.' });
+    const previous = lobbyForUser(user.id);
+    if (previous && previous.id !== lobby.id) removeLobbyMember(previous, user.id);
+    if (!lobby.members.some((member) => member.userId === user.id)) {
+      lobby.members.push({ userId: user.id, joinedAt: now, lastSeenAt: now, readyAt: null, finishedAt: null, didNotFinish: false, nextGateIndex: 0, lastCheckpointAt: null, lastCheckpointPosition: null, raceStartedAt: null });
+    }
+    lobby.updatedAt = now;
+    store.partyInvites = store.partyInvites.filter((candidate) => candidate.toUserId !== user.id);
+    if (!await persistLobby(response)) return;
+    return json(response, 200, { lobby: publicLobby(lobby), message: 'You joined the party.' });
   }
 
   if (url.pathname === '/api/lobby/matchmake') {

@@ -103,6 +103,10 @@
           <h3 id="friendsOnlineHeading">ONLINE NOW <span id="friendsOnlineSectionCount">0</span></h3>
           <div id="onlineFriendList" class="friends-list" aria-live="polite"></div>
         </section>
+        <section class="friends-section" aria-labelledby="recentPilotsHeading">
+          <h3 id="recentPilotsHeading">RECENT PLAYERS <span id="recentPilotsSectionCount">0</span></h3>
+          <div id="recentPilotsList" class="friends-list"></div>
+        </section>
         <section class="friends-section" aria-labelledby="partyInvitesHeading">
           <h3 id="partyInvitesHeading">GAME INVITES <span id="partyInviteSectionCount">0</span></h3>
           <div id="partyInviteList" class="friends-list" aria-live="polite"></div>
@@ -309,15 +313,11 @@
                 <div class="builder-section-heading"><span>3D OBJECT LIBRARY</span><small id="gateCount">00 GATES / 00 OBJECTS</small></div>
                 <div id="builderRaceGateSection">
                   <div class="builder-section-heading"><span>GATES &amp; RACE GRID</span><small>COURSE MARKERS</small></div>
-                  <div class="gate-library" role="group" aria-label="Neon and uploaded STL race gates">
-                  <button class="gate-type is-selected" type="button" data-gate-type="neon-square"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-square" aria-hidden="true"></canvas><span><b>Neon Square</b><small>LED frame gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="neon-ladder"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-ladder" aria-hidden="true"></canvas><span><b>Neon Ladder</b><small>LED rung gates</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="neon-flag"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-flag" aria-hidden="true"></canvas><span><b>Neon Flag</b><small>LED banner gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="neon-hurdle"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-hurdle" aria-hidden="true"></canvas><span><b>Neon Hurdle</b><small>LED crossbar gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="single"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:single" aria-hidden="true"></canvas><span><b>Single / STL</b><small>Uploaded gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="ladder"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:ladder" aria-hidden="true"></canvas><span><b>Ladder / STL</b><small>Uploaded gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="flag"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:flag" aria-hidden="true"></canvas><span><b>Flag / STL</b><small>Uploaded gate</small></span></button>
-                  <button class="gate-type" type="button" data-gate-type="hurdle"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:hurdle" aria-hidden="true"></canvas><span><b>Hurdle / STL</b><small>Uploaded gate</small></span></button>
+                  <div class="gate-library" role="group" aria-label="Neon GLB race gates">
+                  <button class="gate-type is-selected" type="button" data-gate-type="neon-square"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-square" aria-hidden="true"></canvas><span><b>Neon Square</b><small>Imported 9 × 7 ft frame</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-ladder"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-ladder" aria-hidden="true"></canvas><span><b>Neon Ladder</b><small>Imported ladder gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-flag"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-flag" aria-hidden="true"></canvas><span><b>Neon Flag</b><small>Imported flag gate</small></span></button>
+                  <button class="gate-type" type="button" data-gate-type="neon-hurdle"><canvas class="gate-icon builder-model-preview" data-model-preview="gate:neon-hurdle" aria-hidden="true"></canvas><span><b>Neon Hurdle</b><small>Imported hurdle gate</small></span></button>
                   <button class="gate-type" type="button" data-builder-prop="podium"><canvas class="gate-icon builder-model-preview" data-model-preview="prop:podium" aria-hidden="true"></canvas><span><b>Podium</b><small>Red launch stand · 8 required</small></span></button>
                   <button class="gate-type" type="button" data-builder-prop="relay-podium-gate" hidden><canvas class="gate-icon builder-model-preview" data-model-preview="prop:relay-podium-gate" aria-hidden="true"></canvas><span><b>Relay Podium Gate</b><small>Combined station · exactly 4 required</small></span></button>
                   </div>
@@ -536,10 +536,10 @@
         <aside class="world-annotation" aria-hidden="true"><span class="annotation-line"></span><span class="annotation-dot"></span><div><b id="annotationName">NEON DOCKS</b><small id="annotationSite">NIGHT CIRCUIT / 01</small></div></aside>
         <div class="right-stamp" aria-hidden="true"><span>ALT</span><b>04</b><i></i><span>AGL</span></div>
 
-        <div id="podiumInviteLayer" class="podium-invite-layer" aria-label="Invite friends to empty podiums">
-          <button class="podium-invite-button" data-podium-slot="1" type="button" aria-label="Invite a friend to podium 2" title="Invite a friend"><span>+</span></button>
-          <button class="podium-invite-button" data-podium-slot="2" type="button" aria-label="Invite a friend to podium 3" title="Invite a friend"><span>+</span></button>
-          <button class="podium-invite-button" data-podium-slot="3" type="button" aria-label="Invite a friend to podium 4" title="Invite a friend"><span>+</span></button>
+        <div id="podiumInviteLayer" class="podium-invite-layer" aria-label="Open friends and recent players">
+          <button class="podium-invite-button" data-podium-slot="1" type="button" aria-label="Open friends and recent players" title="Friends and recent players"><span>+</span></button>
+          <button class="podium-invite-button" data-podium-slot="2" type="button" aria-label="Open friends and recent players" title="Friends and recent players"><span>+</span></button>
+          <button class="podium-invite-button" data-podium-slot="3" type="button" aria-label="Open friends and recent players" title="Friends and recent players"><span>+</span></button>
         </div>
       </section>
 

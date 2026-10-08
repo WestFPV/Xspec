@@ -26,13 +26,13 @@ Verified accounts and hashed session tokens are stored in `.data/accounts.json` 
 
 ## Flight parties and multiplayer
 
-Sign in, open **Flight Crew**, then create a private party and share its six-character invite code. Parties support four pilots total. **Quick Match** joins an open lobby, while the party host can stage a synchronized crew-race start. Every pilot must use the same reachable Xspec server; the default development server only listens on the local machine. Party state is stored with the single-server account data.
+Sign in, open **Flight Crew**, then create a private party. From the Friends panel, use **INVITE** beside a friend to send an in-app invitation to your open party; invitees can accept it from **GAME INVITES**. You can also share the six-character party code. Empty podium shortcuts open Friends and Recent Players; recent pilots are kept per browser and limited to eight. **Quick Match** joins an open lobby, while the party host can stage a synchronized crew-race start. Every pilot must use the same reachable Xspec server; the default development server only listens on the local machine. Party state is stored with the single-server account data.
 
 Tournament mode stays locked until a future event is scheduled. Set `XSPEC_TOURNAMENT_STARTS_AT` in `.env` to an ISO-8601 timestamp in the future; `XSPEC_TOURNAMENT_TITLE` sets its display name. The server unlocks Tournament mode while that start time is still upcoming and locks it again after the event start time passes. Restart the server after changing these settings.
 
 ## Track builder assets
 
-The builder has procedural gate previews and loads matching GLB models from `public/models/gates/` when present: `single.glb`, `corkscrew.glb`, `ladder.glb`, `dive.glb`, `flag.glb`, and `hurdle.glb`. Model files should use meters, Y-up, and a ground-centered origin; the course editor controls placement, height, rotation, and scale. Missing files keep using the procedural preview.
+The Track Builder race-gate library uses four imported GLB models in `public/models/gates/`: `neon-square.glb`, `neon-ladder.glb`, `neon-flag.glb`, and `neon-hurdle.glb`. The models keep their authored scale; the editor only centers them horizontally and places their lowest point on the ground. The course editor controls placement, rotation, and scale. If a model cannot load, a procedural preview is shown instead. The Relay podium gate is a separate Builder prop and remains available in Relay mode.
 
 ## Production build
 
