@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="115 18 142 190" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="18" x2="0" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#152638"/>
+      <stop offset="1" stop-color="#09131f"/>
+    </linearGradient>
+    <linearGradient id="fabric" x1="153" y1="34" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d7ffff"/>
+      <stop offset=".48" stop-color="#8af5ff"/>
+      <stop offset="1" stop-color="#42c9e3"/>
+    </linearGradient>
+    <linearGradient id="fabricShade" x1="158" y1="43" x2="173" y2="181" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f0ffff" stop-opacity=".58"/>
+      <stop offset=".48" stop-color="#6deafa" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#087d9c" stop-opacity=".26"/>
+    </linearGradient>
+    <filter id="glow" x="140" y="18" width="91" height="187" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+  <rect width="384" height="222" fill="url(#bg)"/>
+  <path d="M153 34 207 40c-5 52-26 112-54 150V34Z" fill="#46eaff" opacity=".58" filter="url(#glow)"/>
+  <path d="M153 34 207 40c-5 52-26 112-54 150V34Z" fill="url(#fabric)" stroke="#e4ffff" stroke-width="1.3" stroke-linejoin="round"/>
+  <path d="M157 40 201 45c-7 47-22 102-44 134V40Z" fill="url(#fabricShade)"/>
+  <path d="m153 34 54 6" stroke="#f5ffff" stroke-width="2" stroke-linecap="round"/>
+  <rect x="168" y="116" width="27" height="11" rx="3" fill="#123747" fill-opacity=".76" stroke="#dbffff" stroke-opacity=".86"/>
+  <text x="181.5" y="123.8" fill="#eaffff" font-family="Arial,sans-serif" font-size="5.5" font-weight="700" letter-spacing=".8" text-anchor="middle">S / F</text>
+  <circle cx="153" cy="34" r="2.5" fill="#efffff"/>
+  <circle cx="207" cy="40" r="2.5" fill="#efffff"/>
+</svg>

@@ -7,7 +7,6 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { Capsule } from 'three/addons/math/Capsule.js';
 import { Octree } from 'three/addons/math/Octree.js';
 import { standardRaceTracks } from '../race-courses.js';
 import { usernameError } from '../username-policy.js';
@@ -382,7 +381,30 @@ world.name = 'Neon Flight Worlds';
 scene.add(world);
 const flightCollisionOctree = new Octree();
 const flightCollisionRadius = 0.62;
-const flightCollisionCapsule = new Capsule(new THREE.Vector3(), new THREE.Vector3(), flightCollisionRadius);
+const flightCollisionStepDistance = 0.1;
+const flightCollisionExtent = 1.8;
+const flightCollisionRestitution = 0.24;
+const flightCollisionTangentialRetention = 0.78;
+const flightCollisionInverseInertia = 0.42;
+const flightCollisionStepOrientation = new THREE.Quaternion();
+const flightCollisionArm = new THREE.Vector3();
+const flightCollisionImpulse = new THREE.Vector3();
+const flightCollisionTorque = new THREE.Vector3();
+const flightCollisionTangentVelocity = new THREE.Vector3();
+const flightCollisionAngularAxis = new THREE.Vector3();
+const flightCollisionAngularStep = new THREE.Quaternion();
+const flightCollisionBodySpheres = [
+  { offset: new THREE.Vector3(0, 0, 0), radius: 0.3, sphere: new THREE.Sphere() },
+  ...[
+    [-1.28, -0.84],
+    [-1.28, 0.84],
+    [1.28, -0.84],
+    [1.28, 0.84],
+  ].flatMap(([x, z]) => [
+    { offset: new THREE.Vector3(x * 0.5, 0, z * 0.5), radius: 0.22, sphere: new THREE.Sphere() },
+    { offset: new THREE.Vector3(x, 0, z), radius: 0.22, sphere: new THREE.Sphere() },
+  ]),
+];
 const environmentRoot = new THREE.Group();
 const gateRoot = new THREE.Group();
 const trackRoot = new THREE.Group();
@@ -441,8 +463,6 @@ let playgroundGateStructures = null;
 world.add(environmentRoot, gateRoot, trackRoot, communityPropRoot, builderPropRoot, builderGhostRoot, builderFlightRoot, biomeLightRoot, menuBackdropRoot, menuPlatformCollisionRoot, menuCityRoot, menuStageRoot, menuAmbientRoot, menuInfoBannerRoot);
 const flightCollisionTarget = new THREE.Vector3();
 const flightCollisionDelta = new THREE.Vector3();
-const flightCollisionLowerOffset = new THREE.Vector3(0, -0.18, 0);
-const flightCollisionUpperOffset = new THREE.Vector3(0, 0.18, 0);
 const flightCollisionMatrix = new THREE.Matrix4();
 const flightCollisionInstanceMatrix = new THREE.Matrix4();
 const flightCollisionBounds = new THREE.Box3();
@@ -525,25 +545,52 @@ function resolveFlightWorldCollision() {
   flightCollisionTarget.copy(flight.position);
   flightCollisionDelta.subVectors(flightCollisionTarget, previousFlightPosition);
   const travelDistance = flightCollisionDelta.length();
-  const stepCount = Math.max(1, Math.ceil(travelDistance / (flightCollisionRadius * 0.55)));
+  const orientationDot = THREE.MathUtils.clamp(Math.abs(previousFlightOrientation.dot(flight.orientation)), 0, 1);
+  const rotationDistance = 2 * Math.acos(orientationDot) * flightCollisionExtent;
+  const stepCount = Math.max(1, Math.ceil((travelDistance + rotationDistance) / flightCollisionStepDistance));
   let collided = false;
   for (let step = 1; step <= stepCount; step += 1) {
     flight.position.copy(previousFlightPosition).addScaledVector(flightCollisionDelta, step / stepCount);
-    flightCollisionCapsule.start.copy(flight.position).add(flightCollisionLowerOffset);
-    flightCollisionCapsule.end.copy(flight.position).add(flightCollisionUpperOffset);
+    flightCollisionStepOrientation.copy(previousFlightOrientation).slerp(flight.orientation, step / stepCount);
+    flightCollisionBodySpheres.forEach(({ offset, radius, sphere }) => {
+      sphere.center.copy(offset).applyQuaternion(flightCollisionStepOrientation).add(flight.position);
+      sphere.radius = radius;
+    });
     for (let iteration = 0; iteration < 5; iteration += 1) {
-      const contact = flightCollisionOctree.capsuleIntersect(flightCollisionCapsule);
+      let contact = null;
+      let contactSphere = null;
+      for (const { sphere } of flightCollisionBodySpheres) {
+        const sphereContact = flightCollisionOctree.sphereIntersect(sphere);
+        if (sphereContact && (!contact || sphereContact.depth > contact.depth)) {
+          contact = sphereContact;
+          contactSphere = sphere;
+        }
+      }
       if (!contact) break;
       const normal = contact.normal;
       if (normal.lengthSq() < 0.5) break;
       const correction = contact.depth + 0.002;
-      flightCollisionCapsule.start.addScaledVector(normal, correction);
-      flightCollisionCapsule.end.addScaledVector(normal, correction);
+      flightCollisionArm.copy(contactSphere.center)
+        .addScaledVector(normal, -contactSphere.radius)
+        .sub(flight.position);
+      flightCollisionBodySpheres.forEach(({ sphere }) => sphere.center.addScaledVector(normal, correction));
       flight.position.addScaledVector(normal, correction);
       const intoSurface = flight.velocity.dot(normal);
-      if (intoSurface < 0) flight.velocity.addScaledVector(normal, -intoSurface * 1.28);
+      if (intoSurface < 0) {
+        const normalImpulse = -(1 + flightCollisionRestitution) * intoSurface;
+        flightCollisionImpulse.copy(normal).multiplyScalar(normalImpulse);
+        flight.velocity.add(flightCollisionImpulse);
+        flightCollisionTangentVelocity.copy(flight.velocity)
+          .addScaledVector(normal, -flight.velocity.dot(normal));
+        flight.velocity.addScaledVector(flightCollisionTangentVelocity, flightCollisionTangentialRetention - 1);
+        flightCollisionTorque.crossVectors(flightCollisionArm, flightCollisionImpulse)
+          .multiplyScalar(flightCollisionInverseInertia);
+        flight.impactAngularVelocity.add(flightCollisionTorque);
+        if (flight.impactAngularVelocity.length() > 8) flight.impactAngularVelocity.setLength(8);
+      }
       collided = true;
     }
+    if (collided) break;
   }
   if (collided) flight.velocity.multiplyScalar(0.985);
 }
@@ -2026,12 +2073,6 @@ function drawCompetitiveBanners(data = {}) {
     context.fillStyle = color;
     context.fillText(text, x, y, maxWidth);
   };
-  const drawStat = (title, value, x, widthLimit) => {
-    label(title, x, 790, 'rgba(190,220,235,.62)', 28);
-    fitValue(value, x, 930, widthLimit, 74, '#f1fbff');
-  };
-
-  label('XSPEC  /  FLIGHT LAB  /  LIVE', 120, 145, slide.accent, 34);
   context.strokeStyle = `${slide.accent}88`;
   context.lineWidth = 3;
   context.beginPath(); context.moveTo(120, 190); context.lineTo(width - 120, 190); context.stroke();
@@ -2041,22 +2082,19 @@ function drawCompetitiveBanners(data = {}) {
     const startLabel = startDate && Number.isFinite(startDate.getTime())
       ? new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(startDate)
       : 'NOT SCHEDULED';
-    label(tournament ? 'UP NEXT  /  TOURNAMENT' : 'TOURNAMENT  /  LOCKED', 120, 330, slide.accent, 36);
+    label('RACE SERIES', 120, 330, slide.accent, 36);
     fitValue(tournament?.title || 'NO EVENT SCHEDULED', 120, 565, 1640, 142);
-    drawStat('NEXT START', startLabel.toUpperCase(), 120, 1060);
-    drawStat('SERIES', tournament ? 'XSPEC RACE SERIES' : 'CHECK BACK SOON', 1200, 600);
+    if (tournament) label(`NEXT RACE  ·  ${startLabel.toUpperCase()}`, 120, 850, 'rgba(190,220,235,.78)', 38);
   } else if (slide.type === 'pilot') {
     const pilot = leaders[0];
-    label('GLOBAL RANKINGS  /  TOP PILOT', 120, 330, slide.accent, 36);
-    fitValue(pilot?.username || 'NO PILOTS RANKED', 120, 565, 1640, 142);
-    drawStat('GLOBAL POSITION', pilot ? 'WORLD #1' : 'NOT RANKED', 120, 700);
-    drawStat('PILOT EXPERIENCE', `${(Number(pilot?.xp) || 0).toLocaleString()} XP`, 1000, 760);
+    label('TOP PILOT', 120, 330, slide.accent, 36);
+    fitValue(pilot?.username || 'NO PILOTS YET', 120, 565, 1640, 142);
+    label(pilot ? `#1 WORLDWIDE  ·  ${(Number(pilot.xp) || 0).toLocaleString()} XP` : 'RACE TO CLAIM #1', 120, 850, 'rgba(190,220,235,.78)', 38);
   } else {
     const team = teams[0];
-    label('GLOBAL RANKINGS  /  TOP TEAM', 120, 330, slide.accent, 36);
-    fitValue(team?.name || 'NO TEAMS RANKED', 120, 565, 1640, 142);
-    drawStat('GLOBAL POSITION', team ? 'WORLD #1' : 'NOT RANKED', 120, 700);
-    drawStat('TEAM EXPERIENCE', `${(Number(team?.xp) || 0).toLocaleString()} XP`, 1000, 760);
+    label('TOP TEAM', 120, 330, slide.accent, 36);
+    fitValue(team?.name || 'NO TEAMS YET', 120, 565, 1640, 142);
+    label(team ? `#1 WORLDWIDE  ·  ${(Number(team.xp) || 0).toLocaleString()} XP` : 'RACE TO CLAIM #1', 120, 850, 'rgba(190,220,235,.78)', 38);
   }
 
   texture.needsUpdate = true;
@@ -2325,6 +2363,7 @@ const menuGrassWindQuaternion = new THREE.Quaternion();
 const menuGrassWindEuler = new THREE.Euler();
 const menuGrassWindScale = new THREE.Vector3();
 const menuGrassWindOffset = new THREE.Vector3();
+const propwashVisual = { x: 0, z: 0, strength: 0, radius: 6 };
 function updateGrassWindMeshes(meshes, time) {
   for (const { mesh, state } of meshes) {
     for (let index = 0; index < mesh.count; index += 1) {
@@ -2335,8 +2374,19 @@ function updateGrassWindMeshes(meshes, time) {
       const yaw = state[offset + 3];
       const height = state[offset + 5];
       const phase = time * 0.72 + x * 0.014 + z * 0.021 + state[offset + 7] * 0.18;
-      const swayX = Math.sin(phase) * 0.08 + Math.sin(phase * 0.43 + 1.2) * 0.022;
-      const swayZ = Math.cos(phase * 0.82) * 0.055;
+      let swayX = Math.sin(phase) * 0.08 + Math.sin(phase * 0.43 + 1.2) * 0.022;
+      let swayZ = Math.cos(phase * 0.82) * 0.055;
+      if (propwashVisual.strength > 0) {
+        const dx = x - propwashVisual.x;
+        const dz = z - propwashVisual.z;
+        const distance = Math.hypot(dx, dz);
+        const falloff = Math.max(0, 1 - distance / propwashVisual.radius);
+        const gust = propwashVisual.strength * falloff * falloff;
+        if (distance > 0.01 && gust > 0) {
+          swayX += (dx / distance) * gust * 0.46;
+          swayZ += (dz / distance) * gust * 0.46;
+        }
+      }
 
       menuGrassWindEuler.set(swayZ, yaw, -swayX, 'XYZ');
       menuGrassWindQuaternion.setFromEuler(menuGrassWindEuler);
@@ -2351,6 +2401,7 @@ function updateGrassWindMeshes(meshes, time) {
 }
 
 function updateMenuGrassWind(time) {
+  propwashVisual.strength = 0;
   updateGrassWindMeshes(menuGrassWindMeshes, time);
 }
 
@@ -2720,17 +2771,144 @@ function createGateIndicator(gate) {
   return indicator;
 }
 
+const importedNeonGateScale = 0.408575;
+const importedNeonGateEmissiveIntensity = 0.75;
+const gateGlowReferenceColor = new THREE.Color(colors.cyan);
+const gateGlowReferenceLuminance = gateGlowReferenceColor.r * 0.2126 + gateGlowReferenceColor.g * 0.7152 + gateGlowReferenceColor.b * 0.0722;
+function gateGlowIntensityForColor(color, baseIntensity) {
+  const linearColor = new THREE.Color(color);
+  const luminance = linearColor.r * 0.2126 + linearColor.g * 0.7152 + linearColor.b * 0.0722;
+  const luminanceBoost = Math.pow(gateGlowReferenceLuminance / Math.max(luminance, 0.001), 2);
+  return baseIntensity * Math.max(1, luminanceBoost);
+}
+
 const gateTypes = {
-  'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', targetLongestDimension: 9.4, raceAsset: true },
-  'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', targetLongestDimension: 8.1, raceAsset: true },
-  'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', targetLongestDimension: 6.2, raceAsset: true },
-  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', targetLongestDimension: 5.67, raceAsset: true },
+  'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', raceAsset: true },
+  'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', raceAsset: true },
+  'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', raceAsset: true },
+  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true },
+  'neon-dive': { name: 'Neon Dive', model: '/models/gates/neon-dive.glb', raceAsset: true, modelScale: 0.0489 },
 };
+
+const gatePassBoundaryOpenings = {
+  'neon-square': [{ width: 18, height: 14.6, centerY: 7.3, z: 0 }],
+  'neon-ladder': [
+    { width: 17.7, height: 14.1, centerY: 7.4, z: 0 },
+    { width: 17.7, height: 14.1, centerY: 22.2, z: 0 },
+  ],
+  'neon-flag': [{ width: 45, height: 32, centerX: 19.5, centerY: 14, z: 0 }],
+  'neon-hurdle': [{ width: 18.8, height: 17, centerY: 21.5, z: 0 }],
+  'neon-dive': [
+    { width: 14.2, height: 14.2, centerX: -9.2, centerY: 7.5, z: 0, rotationY: Math.PI / 2 },
+    { width: 14.2, height: 14.2, centerX: 9.2, centerY: 7.5, z: 0, rotationY: -Math.PI / 2 },
+    { width: 18, height: 14.2, centerX: 0, centerY: 14.95, z: 0, rotationX: -Math.PI / 2 },
+    { width: 18, height: 14.2, centerY: 7.5, z: -7.3 },
+    { width: 18, height: 14.2, centerY: 7.5, z: 7.3 },
+  ],
+};
+const gateBoundaryCorrectColor = 0x4cff88;
+const gateBoundaryWrongColor = 0xff4b65;
+
+function updateGatePassBoundaryDirection(gate) {
+  const boundary = gate.userData.gatePassBoundary;
+  const data = gate.userData.gateData;
+  if (!boundary || !data) return;
+  const directions = data.entryDirections;
+  boundary.traverse((object) => {
+    const openingIndex = object.userData.gateBoundaryIndex;
+    const direction = directions?.[openingIndex] ?? data.entryDirection;
+    if (object.userData.gateBoundaryFace === 'front' || object.userData.gateBoundaryFace === 'back') {
+      const positiveNormalIsCorrect = direction !== -1;
+      const positiveZFace = object.userData.gateBoundaryFace === 'front';
+      const correctSide = positiveZFace === positiveNormalIsCorrect;
+      object.material.color.setHex(correctSide ? gateBoundaryCorrectColor : gateBoundaryWrongColor);
+      object.material.opacity = direction === 0 ? 0 : 0.22;
+    } else if (object.userData.isGatePassBoundaryOutline) {
+      object.visible = direction !== 0;
+    }
+  });
+  updateBuilderGateBadgeVisibility(gate);
+}
+
+function createGatePassBoundary(gate, data) {
+  const openings = gatePassBoundaryOpenings[data.type];
+  if (!openings) return;
+  const boundary = new THREE.Group();
+  boundary.name = 'Builder-only gate pass boundary';
+  boundary.userData.isBuilderGateBoundary = true;
+  boundary.visible = currentPage === 'builder' && !flying;
+  data.entryDirection = data.entryDirection === -1 ? -1 : data.entryDirection === 0 ? 0 : 1;
+  if (!Array.isArray(data.entryDirections) || data.entryDirections.length !== openings.length) {
+    data.entryDirections = openings.map(() => data.entryDirection);
+  } else {
+    data.entryDirections = data.entryDirections.map((direction) => direction === 0 ? 0 : direction === -1 ? -1 : 1);
+  }
+  gate.userData.passBoundaryOpenings = openings;
+  gate.userData.gatePassBoundary = boundary;
+  gate.userData.gatePassPlanes = openings.map((opening) => {
+    const rotation = new THREE.Euler(opening.rotationX || 0, opening.rotationY || 0, 0);
+    return {
+      point: new THREE.Vector3(opening.centerX || 0, opening.centerY, opening.z),
+      normal: new THREE.Vector3(0, 0, 1).applyEuler(rotation).normalize(),
+      widthAxis: new THREE.Vector3(1, 0, 0).applyEuler(rotation).normalize(),
+      heightAxis: new THREE.Vector3(0, 1, 0).applyEuler(rotation).normalize(),
+      width: opening.width,
+      height: opening.height,
+      circle: opening.circle === true,
+    };
+  });
+  gate.userData.gatePassPlane = gate.userData.gatePassPlanes.find((plane) => plane.normal.z > 0.99) || gate.userData.gatePassPlanes[0];
+
+  for (const [openingIndex, opening] of openings.entries()) {
+    const geometry = opening.circle
+      ? new THREE.CircleGeometry(opening.width / 2, 48)
+      : new THREE.PlaneGeometry(opening.width, opening.height);
+    for (const [face, side] of [['front', THREE.FrontSide], ['back', THREE.BackSide]]) {
+      const faceMesh = new THREE.Mesh(geometry.clone(), new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+        depthTest: false,
+        side,
+      }));
+      faceMesh.position.set(opening.centerX || 0, opening.centerY, opening.z);
+      faceMesh.rotation.set(opening.rotationX || 0, opening.rotationY || 0, 0);
+      faceMesh.renderOrder = 8;
+      faceMesh.userData.gateBoundaryFace = face;
+      faceMesh.userData.gateBoundaryIndex = openingIndex;
+      faceMesh.userData.isGatePassBoundarySurface = true;
+      boundary.add(faceMesh);
+    }
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: 0x9cefff, transparent: true, opacity: 0.8, depthTest: false }),
+    );
+    geometry.dispose();
+    outline.position.set(opening.centerX || 0, opening.centerY, opening.z);
+    outline.rotation.set(opening.rotationX || 0, opening.rotationY || 0, 0);
+    outline.renderOrder = 9;
+    outline.userData.gateBoundaryIndex = openingIndex;
+    outline.userData.isGatePassBoundaryOutline = true;
+    boundary.add(outline);
+  }
+
+  gate.add(boundary);
+  data.entryDirection = data.entryDirections[0];
+  updateGatePassBoundaryDirection(gate);
+}
 
 function createProceduralGate(type, hue = 'cyan') {
   const group = new THREE.Group();
   const accent = colors[hue] ?? colors.cyan;
-  const led = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.35, metalness: 0.16, emissive: accent, emissiveIntensity: 1.3, toneMapped: false });
+  const led = new THREE.MeshStandardMaterial({
+    color: accent,
+    roughness: 0.35,
+    metalness: 0.16,
+    emissive: accent,
+    emissiveIntensity: gateGlowIntensityForColor(accent, 0.8),
+    toneMapped: false,
+  });
   const ring = (parent, radius, position, rotation = [0, 0, 0], material = led) => {
     const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.14, 8, 36), material);
     mesh.position.set(...position); mesh.rotation.set(...rotation); parent.add(mesh); return mesh;
@@ -2772,6 +2950,15 @@ function createProceduralGate(type, hue = 'cyan') {
     box(group, [0.24, 2.35, 0.24], [2.7, 1.175, 0], led);
     box(group, [5.55, 0.34, 0.42], [0, 2.12, 0], led);
     for (let i = 0; i < 7; i += 1) box(group, [0.14, 0.36, 0.46], [-2.35 + i * 0.78, 2.12, 0.02], led);
+  } else if (type === 'neon-dive') {
+    const frame = new THREE.Mesh(new THREE.TorusGeometry(3.2, 0.16, 10, 48), led);
+    frame.rotation.y = Math.PI / 2;
+    frame.rotation.x = -Math.PI / 5;
+    frame.position.y = 3.2;
+    frame.userData.isGateLed = true;
+    group.add(frame);
+    box(group, [0.18, 3.2, 0.18], [-2.8, 1.6, 0], led);
+    box(group, [0.18, 3.2, 0.18], [2.8, 1.6, 0], led);
   }
   group.traverse((node) => { if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; } });
   group.userData.proceduralGate = true;
@@ -3282,8 +3469,8 @@ function createBuilderPropModel(type) {
       metalness: 0.12,
       toneMapped: false,
     });
-    const frameWidth = 9;
-    const frameHeight = 10.4;
+    const frameWidth = 18.8;
+    const frameHeight = 15;
     const frameDepth = 0.3;
     for (const x of [-frameWidth / 2, frameWidth / 2]) {
       const upright = new THREE.Mesh(new THREE.BoxGeometry(frameDepth, frameHeight, frameDepth), neon);
@@ -3457,46 +3644,52 @@ function drawFallbackBuilderPreview(canvas, type) {
   context.lineWidth = 3;
   context.shadowColor = '#64efff';
   context.shadowBlur = 8;
-  if (type.startsWith('gate:')) {
-    const gateType = type.slice(5);
-    context.strokeRect(42, 12, 44, 45);
-    if (gateType === 'neon-ladder') {
-      context.beginPath(); context.moveTo(42, 27); context.lineTo(86, 27); context.moveTo(42, 42); context.lineTo(86, 42); context.stroke();
-    }
-  } else {
-    const propType = type.slice(5);
-    context.fillStyle = propType === 'podium' ? '#ff8a1d' : '#617d93';
-    context.fillRect(37, 38, 54, 23);
-    if (propType === 'relay-podium-gate') {
-      context.strokeStyle = '#45dfff';
-      context.lineWidth = 4;
-      context.strokeRect(40, 8, 48, 53);
-      context.fillStyle = '#a91f2d';
-      context.fillRect(44, 39, 40, 18);
-    }
-    if (propType === 'house') { context.beginPath(); context.moveTo(34, 39); context.lineTo(64, 15); context.lineTo(94, 39); context.closePath(); context.fill(); }
-    if (propType === 'tower') context.fillRect(54, 10, 20, 52);
+  const propType = type.slice(5);
+  context.fillStyle = propType === 'podium' ? '#ff8a1d' : '#617d93';
+  context.fillRect(37, 38, 54, 23);
+  if (propType === 'relay-podium-gate') {
+    context.strokeStyle = '#45dfff';
+    context.lineWidth = 4;
+    context.strokeRect(40, 8, 48, 53);
+    context.fillStyle = '#a91f2d';
+    context.fillRect(44, 39, 40, 18);
   }
+  if (propType === 'house') { context.beginPath(); context.moveTo(34, 39); context.lineTo(64, 15); context.lineTo(94, 39); context.closePath(); context.fill(); }
+  if (propType === 'tower') context.fillRect(54, 10, 20, 52);
 }
 
 function renderBuilderModelToCanvas(canvas, model) {
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error(`Could not create a 2D preview context for ${model.userData.builderPropType || 'builder object'}.`);
   const bounds = new THREE.Box3().setFromObject(model);
-  const center = bounds.getCenter(new THREE.Vector3());
+  if (bounds.isEmpty()) throw new Error(`No visible geometry for ${model.userData.builderPropType || 'builder object'} preview.`);
   const size = bounds.getSize(new THREE.Vector3());
-  const largest = Math.max(size.x, size.y, size.z, 1);
-  model.position.sub(center);
+  const largest = Math.max(size.x, size.y, size.z, 0.001);
   model.scale.multiplyScalar(4.1 / largest);
+  model.updateWorldMatrix(true, true);
+  bounds.setFromObject(model);
+  model.position.sub(bounds.getCenter(new THREE.Vector3()));
+  model.updateWorldMatrix(true, true);
+  const fittedBounds = new THREE.Box3().setFromObject(model);
+  const radius = Math.max(fittedBounds.getBoundingSphere(new THREE.Sphere()).radius, 0.1);
+  const viewDirection = new THREE.Vector3(6, 4.6, 7.2).normalize();
+  const distance = radius / Math.sin(THREE.MathUtils.degToRad(builderPreviewCamera.fov / 2)) * 1.16;
+
   builderPreviewScene.add(model);
-  builderPreviewCamera.position.set(6, 4.6, 7.2);
-  builderPreviewCamera.lookAt(0, 0, 0);
   builderPreviewCamera.aspect = BUILDER_PREVIEW_WIDTH / BUILDER_PREVIEW_HEIGHT;
+  builderPreviewCamera.near = Math.max(0.01, distance - radius * 1.5);
+  builderPreviewCamera.far = distance + radius * 2.5;
+  builderPreviewCamera.position.copy(viewDirection).multiplyScalar(distance);
+  builderPreviewCamera.lookAt(0, 0, 0);
   builderPreviewCamera.updateProjectionMatrix();
+  builderPreviewRenderer.setClearColor(0x000000, 0);
   builderPreviewRenderer.render(builderPreviewScene, builderPreviewCamera);
   canvas.width = BUILDER_PREVIEW_WIDTH;
   canvas.height = BUILDER_PREVIEW_HEIGHT;
-  const context = canvas.getContext('2d');
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = '#0b1522';
+  const background = context.createLinearGradient(0, 0, 0, canvas.height);
+  background.addColorStop(0, '#152638');
+  background.addColorStop(1, '#09131f');
+  context.fillStyle = background;
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(builderPreviewRenderer.domElement, 0, 0, canvas.width, canvas.height);
   builderPreviewScene.remove(model);
@@ -3514,18 +3707,23 @@ function renderBuilderModelPreviews() {
       builderPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace;
     }
     for (const canvas of canvases) {
-      const modelId = canvas.dataset.modelPreview;
-      const [kind, type] = modelId.split(':');
-      const model = kind === 'gate' ? createProceduralGate(type) : createBuilderPropModel(type);
-      renderBuilderModelToCanvas(canvas, model);
-      if (kind === 'gate') {
-        void loadGateModel(type).then((source) => {
-          if (source && canvas.isConnected && builderPreviewRenderer) renderBuilderModelToCanvas(canvas, cloneGateModel(source));
-        });
+      const [, type] = canvas.dataset.modelPreview.split(':');
+      let model = null;
+      try {
+        model = createBuilderPropModel(type);
+        renderBuilderModelToCanvas(canvas, model);
+      } catch (error) {
+        console.error(`Failed to render builder preview for "${type}".`, error);
+        if (model) {
+          builderPreviewScene.remove(model);
+          disposeBuilderVisual(model);
+        }
+        drawFallbackBuilderPreview(canvas, `prop:${type}`);
       }
     }
-  } catch {
-    canvases.forEach((canvas) => drawFallbackBuilderPreview(canvas, canvas.dataset.modelPreview || 'gate:neon-square'));
+  } catch (error) {
+    console.error('Failed to initialize the builder preview renderer.', error);
+    canvases.forEach((canvas) => drawFallbackBuilderPreview(canvas, canvas.dataset.modelPreview || 'prop:podium'));
   }
 }
 
@@ -3543,19 +3741,18 @@ function loadGateModel(type) {
           return;
         }
         const center = bounds.getCenter(new THREE.Vector3());
-        const dimensions = bounds.getSize(new THREE.Vector3());
-        const longestDimension = Math.max(dimensions.x, dimensions.y, dimensions.z);
+        const modelScale = config.modelScale ?? importedNeonGateScale;
         const normalized = new THREE.Group();
-        normalized.position.set(-center.x, -bounds.min.y, -center.z);
+        normalized.position.set(-center.x * modelScale, -bounds.min.y * modelScale, -center.z * modelScale);
+        normalized.scale.setScalar(modelScale);
         normalized.add(gltf.scene);
-        normalized.scale.setScalar(config.targetLongestDimension / longestDimension / 1.5);
         normalized.userData.importedGate = true;
         normalized.traverse((node) => {
           if (!node.isMesh) return;
           node.material = new THREE.MeshStandardMaterial({
             color: 0x52eaff,
             emissive: 0x0aa9c4,
-            emissiveIntensity: 1.25,
+            emissiveIntensity: importedNeonGateEmissiveIntensity,
             metalness: 0.24,
             roughness: 0.34,
             toneMapped: false,
@@ -3591,47 +3788,125 @@ function applyGateLedColor(group, hue = 'cyan') {
       if (!material?.color) return;
       material.color.copy(color);
       material.emissive?.copy(color);
+      material.emissiveIntensity = gateGlowIntensityForColor(color, importedNeonGateEmissiveIntensity);
     });
   });
 }
 
+function builderGateRouteSlots() {
+  return builderGates.flatMap((gate) => {
+    const openingCount = gate.type === 'neon-dive' ? gatePassBoundaryOpenings['neon-dive'].length : 1;
+    if (openingCount > 1 && (!Array.isArray(gate.entryRouteOrders) || gate.entryRouteOrders.length !== openingCount)) {
+      const baseOrder = Number(gate.routeOrder) || 0;
+      gate.entryRouteOrders = Array.from({ length: openingCount }, (_, openingIndex) => {
+        const direction = gate.entryDirections?.[openingIndex] ?? 1;
+        if (direction === 0 || (openingIndex === 0 && gate.isStartFinish) || (baseOrder === 0 && !gate.isStartFinish)) return 0;
+        return baseOrder + openingIndex / 100;
+      });
+      gate.routeOrder = gate.entryRouteOrders[0];
+    }
+    if (openingCount > 1 && (!Array.isArray(gate.entryStartFinish) || gate.entryStartFinish.length !== openingCount)) {
+      gate.entryStartFinish = Array.from({ length: openingCount }, (_, openingIndex) =>
+        openingIndex === 0 && gate.isStartFinish === true);
+    }
+    return Array.from({ length: openingCount }, (_, openingIndex) => {
+      const routeOrder = openingCount > 1 ? Number(gate.entryRouteOrders[openingIndex]) || 0 : Number(gate.routeOrder) || 0;
+      const direction = gate.entryDirections?.[openingIndex] ?? gate.entryDirection ?? 1;
+      const isStartFinish = openingCount > 1
+        ? gate.entryStartFinish[openingIndex] === true
+        : gate.isStartFinish === true;
+      if (direction === 0 && !isStartFinish) {
+        if (openingCount > 1) gate.entryRouteOrders[openingIndex] = 0;
+        else gate.routeOrder = 0;
+      }
+      return {
+        ...gate,
+        gate,
+        openingIndex: openingCount > 1 ? openingIndex : null,
+        isStartFinish,
+        routeOrder: direction === 0 && !isStartFinish
+          ? 0
+          : routeOrder,
+      };
+    });
+  });
+}
+
+function setBuilderGateRouteSlotOrder(slot, routeOrder) {
+  if (slot.openingIndex === null) slot.gate.routeOrder = routeOrder;
+  else {
+    slot.gate.entryRouteOrders[slot.openingIndex] = routeOrder;
+    if (slot.openingIndex === 0) slot.gate.routeOrder = routeOrder;
+  }
+}
+
 function updateBuilderGateBadge(gate, data) {
-  const previous = gate.userData.gateNumberBadge;
-  if (previous) {
+  if (data.type === 'neon-dive') builderGateRouteSlots();
+  const previousBadges = gate.userData.gateNumberBadges
+    || (gate.userData.gateNumberBadge ? [gate.userData.gateNumberBadge] : []);
+  previousBadges.forEach((previous) => {
     gate.remove(previous);
     previous.geometry.dispose();
     previous.material.map?.dispose();
     previous.material.dispose();
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = 192;
-  canvas.height = 96;
-  const context = canvas.getContext('2d');
-  if (!context) return;
-  const isStartFinish = data.isStartFinish === true;
-  const label = isStartFinish ? 'S / F' : String(data.routeOrder || 1).padStart(2, '0');
-  context.fillStyle = isStartFinish ? '#143328' : '#0b1a28';
-  context.strokeStyle = isStartFinish ? '#71f1bf' : '#6ee7ff';
-  context.lineWidth = 6;
-  context.beginPath();
-  context.roundRect(6, 6, 180, 84, 20);
-  context.fill();
-  context.stroke();
-  context.fillStyle = isStartFinish ? '#a7ffda' : '#eafaff';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.font = `800 ${isStartFinish ? 42 : 50}px system-ui, sans-serif`;
-  context.fillText(label, 96, 48);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }));
-  badge.scale.set(isStartFinish ? 2.8 : 2.2, 1.1, 1);
-  badge.position.set(0, 7.35, 0);
-  badge.renderOrder = 8;
-  badge.userData.isBuilderGateBadge = true;
-  badge.visible = currentPage === 'builder' && !flying;
-  gate.userData.gateNumberBadge = badge;
-  gate.add(badge);
+  });
+  const flagGate = gate.userData.gateType === 'neon-flag';
+  const hurdleGate = gate.userData.gateType === 'neon-hurdle';
+  const multipleEntranceGate = ['neon-ladder', 'neon-dive'].includes(gate.userData.gateType);
+  const flagOpening = gate.userData.passBoundaryOpenings?.[0];
+  const badgePositions = multipleEntranceGate
+    ? gate.userData.passBoundaryOpenings.map(({ centerX = 0, centerY, z }, openingIndex) => ({ x: centerX, y: centerY, z, openingIndex }))
+    : [{ x: flagGate ? flagOpening?.centerX || 0 : 0, y: flagGate || hurdleGate ? flagOpening?.centerY || 0 : 7.35, z: 0 }];
+  const badges = badgePositions.map(({ x, y, z }, openingIndex) => {
+    const hasMultipleOpenings = ['neon-ladder', 'neon-dive'].includes(data.type);
+    const routeSlot = builderGateRouteSlots().find((slot) => slot.gate.id === data.id
+      && slot.openingIndex === (data.type === 'neon-dive' ? openingIndex : null));
+    const isStartFinish = routeSlot?.isStartFinish ?? data.isStartFinish === true;
+    const routeOrder = data.type === 'neon-dive'
+      ? Number(data.entryRouteOrders?.[openingIndex]) || 0
+      : Number.isSafeInteger(data.routeOrder) ? data.routeOrder : 0;
+    const canvas = document.createElement('canvas');
+    canvas.width = 192;
+    canvas.height = 96;
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    const label = isStartFinish ? 'S / F' : routeOrder === 0 ? 'N/A' : String(routeOrder).padStart(2, '0');
+    context.fillStyle = isStartFinish ? '#143328' : '#0b1a28';
+    context.strokeStyle = isStartFinish ? '#71f1bf' : '#6ee7ff';
+    context.lineWidth = 6;
+    context.beginPath();
+    context.roundRect(6, 6, 180, 84, 20);
+    context.fill();
+    context.stroke();
+    context.fillStyle = isStartFinish ? '#a7ffda' : '#eafaff';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = `800 ${isStartFinish ? 42 : 50}px system-ui, sans-serif`;
+    context.fillText(label, 96, 48);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }));
+    badge.scale.set(flagGate ? 3.2 : hasMultipleOpenings ? 2.6 : isStartFinish ? 2.8 : 2.2, flagGate ? 1.6 : hasMultipleOpenings ? 1.3 : 1.1, 1);
+    badge.position.set(x, y, z);
+    badge.renderOrder = 10;
+    badge.userData.isBuilderGateBadge = true;
+    badge.userData.gateBadgeOpeningIndex = openingIndex;
+    badge.visible = currentPage === 'builder' && !flying;
+    gate.add(badge);
+    return badge;
+  }).filter(Boolean);
+  gate.userData.gateNumberBadges = badges;
+  gate.userData.gateNumberBadge = badges[0] || null;
+  updateBuilderGateBadgeVisibility(gate);
+}
+
+function updateBuilderGateBadgeVisibility(gate) {
+  const data = gate.userData.gateData;
+  const badges = gate.userData.gateNumberBadges || [];
+  badges.forEach((badge, index) => {
+    const direction = data?.entryDirections?.[index] ?? data?.entryDirection ?? 1;
+    badge.visible = currentPage === 'builder' && !flying && direction !== 0;
+  });
 }
 
 function createBuilderGate(data) {
@@ -3640,6 +3915,7 @@ function createBuilderGate(data) {
   gate.userData.gateId = data.id;
   gate.userData.gateType = data.type;
   gate.userData.gateData = data;
+  createGatePassBoundary(gate, data);
   gate.position.set(data.x, data.y, data.z);
   gate.rotation.set(
     THREE.MathUtils.degToRad(data.rotationX || 0),
@@ -3653,13 +3929,15 @@ function createBuilderGate(data) {
   gateRoot.add(gate);
   loadGateModel(data.type).then((source) => {
     if (!source || gate.parent !== gateRoot) return;
-    const indicator = gate.userData.flightIndicator;
-    if (indicator) gate.remove(indicator);
+    const indicators = gate.userData.flightIndicators || [];
+    indicators.forEach((indicator) => gate.remove(indicator));
     clearChildren(gate);
     const model = cloneGateModel(source);
     applyGateLedColor(model, data.color);
     gate.add(model);
-    if (indicator) gate.add(indicator);
+    createGatePassBoundary(gate, data);
+    indicators.forEach((indicator) => gate.add(indicator));
+    if (indicators.length) gate.userData.flightIndicators = indicators;
     updateBuilderGateBadge(gate, data);
     gate.userData.loadedModel = true;
   });
@@ -4098,6 +4376,12 @@ function applyTrackSelection(trackId, persist = true) {
     const gate = addGate(point[0], point[1], point[2], hue, 2.35, yaw, false, trackRoot);
     gate.rotation.x = THREE.MathUtils.degToRad(Number(savedRotationsX[pointIndex]) || 0);
     gate.rotation.z = THREE.MathUtils.degToRad(Number(savedRotationsZ[pointIndex]) || 0);
+    const savedEntryDirections = Array.isArray(activeTrack.gateEntryDirections) ? activeTrack.gateEntryDirections : [];
+    const directions = savedEntryDirections[pointIndex];
+    const entryDirections = Array.isArray(directions)
+      ? directions.map((direction) => direction === 0 ? 0 : direction === -1 ? -1 : 1)
+      : [directions === 0 ? 0 : directions === -1 ? -1 : 1];
+    gate.userData.gateData = { entryDirections, entryDirection: entryDirections[0] };
     gate.scale.set(
       THREE.MathUtils.clamp(Number(savedScalesX[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
       THREE.MathUtils.clamp(Number(savedScalesY[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
@@ -4209,7 +4493,6 @@ function applyEnvironmentToScene() {
   document.querySelector('#environmentWeather').value = environmentState.weather;
   document.querySelector('#environmentBrightness').value = String(Math.round(environmentState.brightness * 100));
   document.querySelector('#environmentBrightnessValue').textContent = `${Math.round(environmentState.brightness * 100)}%`;
-  document.querySelector('#fieldStatusLabel').textContent = `FIELD ${String(Object.keys(biomes).indexOf(activeBiome) + 1).padStart(2, '0')} / ${String(visualTime).padStart(2, '0')}:00 READY`;
 }
 
 function makeTube(points, radius, material, segments = 48) {
@@ -6622,10 +6905,8 @@ function applyBiome(id, persist = true, { buildEnvironment = true } = {}) {
   document.querySelector('#biomeOverline').textContent = `${biome.region} / FIELD ${String(Object.keys(biomes).indexOf(biome.id) + 1).padStart(2, '0')}`;
   document.querySelector('#stageLocation').textContent = `${biome.region} / ${biome.name.toUpperCase()}`;
   document.querySelector('#annotationName').textContent = biome.name.toUpperCase();
-  document.querySelector('#annotationSite').textContent = `${biome.region} / ${String(Object.keys(biomes).indexOf(biome.id) + 1).padStart(2, '0')}`;
   document.querySelector('#flightFieldLabel').textContent = biome.name.toUpperCase();
   document.querySelector('#builderBiomeSelect').value = 'neon-docks';
-  document.querySelector('#fieldStatusLabel').textContent = `FIELD ${String(Object.keys(biomes).indexOf(biome.id) + 1).padStart(2, '0')} / ${String(environmentState.time).padStart(2, '0')}:00 READY`;
   document.querySelector('#mapThumb').dataset.biome = biome.id;
   document.querySelector('#biomeSelect').value = biome.id;
   document.querySelector('.map-thumb-label').textContent = `AF / ${String(Object.keys(biomes).indexOf(biome.id) + 1).padStart(2, '0')}`;
@@ -6698,9 +6979,7 @@ function showTrackPickerSkyPlatformLabel() {
   document.querySelector('#biomeDescription').textContent = 'A grass flight deck beneath a field of stars';
   document.querySelector('#stageLocation').textContent = 'SKY PLATFORM';
   document.querySelector('#annotationName').textContent = 'SKY PLATFORM';
-  document.querySelector('#annotationSite').textContent = 'COURSE DECK / 01';
   document.querySelector('#flightFieldLabel').textContent = 'SKY PLATFORM';
-  document.querySelector('#fieldStatusLabel').textContent = `SKY PLATFORM / ${String(environmentState.time).padStart(2, '0')}:00 READY`;
   document.querySelector('#mapThumb').dataset.biome = 'sky-platform';
   document.querySelector('.map-thumb-label').textContent = 'SKY / 01';
 }
@@ -6978,6 +7257,47 @@ let authSessionReady = false;
 let authEmailAddress = '';
 let authSetupToken = '';
 const storedSettings = readStored('aerframe-settings', {});
+const flightTuneDefaults = {
+  rollP: 12,
+  rollI: 1.2,
+  rollD: 0.02,
+  pitchP: 12,
+  pitchI: 1.2,
+  pitchD: 0.02,
+  yawP: 8,
+  yawI: 0.8,
+  yawD: 0.01,
+  weight: 650,
+  wheelbase: 220,
+  motorThrust: 563,
+  propDiameter: 5,
+  motorResponse: 80,
+  airDrag: 0.34,
+  propwash: 100,
+};
+const flightTuneRanges = {
+  rollP: [0, 40],
+  rollI: [0, 5],
+  rollD: [0, 0.1],
+  pitchP: [0, 40],
+  pitchI: [0, 5],
+  pitchD: [0, 0.1],
+  yawP: [0, 40],
+  yawI: [0, 5],
+  yawD: [0, 0.1],
+  weight: [300, 2000],
+  wheelbase: [100, 500],
+  motorThrust: [200, 2000],
+  propDiameter: [2, 10],
+  motorResponse: [10, 250],
+  airDrag: [0, 2],
+  propwash: [0, 200],
+};
+const flightTune = Object.fromEntries(Object.entries(flightTuneDefaults).map(([name, fallback]) => {
+  const value = Number(storedSettings.flightTune?.[name]);
+  const [min, max] = flightTuneRanges[name];
+  return [name, Number.isFinite(value) ? THREE.MathUtils.clamp(value, min, max) : fallback];
+}));
 let currentPage = 'singleplayer';
 let pageBeforeSettings = 'singleplayer';
 let selectedMode = 'Race';
@@ -6985,7 +7305,15 @@ let flying = false;
 function syncGateBadgeVisibility() {
   const visible = currentPage === 'builder' && !flying;
   world.traverse((object) => {
-    if (object.userData.isBuilderGateBadge) object.visible = visible;
+    if (object.userData.isBuilderGateBadge) {
+      let gate = object.parent;
+      while (gate && !gate.userData.isBuilderGate) gate = gate.parent;
+      const openingIndex = object.userData.gateBadgeOpeningIndex ?? 0;
+      const data = gate?.userData.gateData;
+      const direction = data?.entryDirections?.[openingIndex] ?? data?.entryDirection ?? 1;
+      object.visible = visible && direction !== 0;
+    }
+    if (object.userData.isBuilderGateBoundary) object.visible = visible;
   });
 }
 let hudEnabled = storedSettings.hudEnabled !== false;
@@ -7013,6 +7341,7 @@ let builderPlacementHistory = [];
 let builderTrackPicture = '';
 let publishingBuilderTrack = false;
 let selectedGateId = null;
+let selectedGateOpeningIndex = null;
 let selectedBuilderPropId = null;
 let activeGateType = 'neon-square';
 let gatePlacementArmed = false;
@@ -7049,8 +7378,9 @@ function builderRelayStationsArePaired() {
 
 function builderTrackMissingRequirements() {
   const missing = [];
-  if (!builderGates.some((gate) => gate.isStartFinish)) missing.push('a marked start / finish gate');
-  const numberedGateCount = builderGates.filter((gate) => !gate.isStartFinish).length;
+  const routeSlots = builderGateRouteSlots();
+  if (!routeSlots.some((slot) => slot.isStartFinish)) missing.push('a marked start / finish gate');
+  const numberedGateCount = routeSlots.filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length;
   if (builderGameMode === 'relay-race') {
     if (numberedGateCount !== RELAY_STATION_COUNT - 1) missing.push('exactly 3 numbered gates for the four Relay stations');
     if (builderRelayPodiumGateCount() !== RELAY_STATION_COUNT) missing.push(`exactly 4 Relay podium gates (${builderRelayPodiumGateCount()}/4 placed)`);
@@ -7153,7 +7483,7 @@ function syncWorldMode() {
   menuStreetLampRoot.visible = !platformOnlyScene;
   menuCityRoot.visible = menuSetVisible;
   menuStageRoot.visible = menuSetVisible;
-  menuAmbientRoot.visible = menuSetVisible || platformOnlyScene;
+  menuAmbientRoot.visible = menuSetVisible || (platformOnlyScene && currentPage !== 'builder');
   menuInfoBannerRoot.visible = menuSetVisible;
   builderFlightRoot.visible = flying && currentPage === 'builder' && builderTestCourse;
   defaultGateObjects.forEach((gate) => { gate.visible = !menuScene && currentPage !== 'builder'; });
@@ -7175,12 +7505,14 @@ function readStored(key, fallback) {
 }
 
 const savedInput = readStored('aerframe-input-settings', {});
+const rateProfileVersion = 1;
+const shouldMigrateRateProfile = !Number.isInteger(savedInput.rateProfileVersion) || savedInput.rateProfileVersion < rateProfileVersion;
 const rateAxes = ['roll', 'pitch', 'yaw'];
 const defaultRateProfiles = {
   betaflight: {
-    roll: { rate: 1, superRate: 0.7, expo: 0 },
-    pitch: { rate: 1, superRate: 0.7, expo: 0 },
-    yaw: { rate: 1, superRate: 0.7, expo: 0 },
+    roll: { rate: 0.95, superRate: 0.7, expo: 0 },
+    pitch: { rate: 0.8, superRate: 0.7, expo: 0 },
+    yaw: { rate: 0.37, superRate: 0.7, expo: 0 },
   },
   actual: {
     roll: { centerRate: 70, maxRate: 670, expo: 0.2 },
@@ -7207,52 +7539,66 @@ function loadRateProfile(mode) {
 const inputConfig = {
   gamepadIndex: Number.isInteger(savedInput.gamepadIndex) ? savedInput.gamepadIndex : null,
   restartButton: Number.isInteger(savedInput.restartButton) && savedInput.restartButton >= 0 && savedInput.restartButton < 32 ? savedInput.restartButton : null,
-  restartCrsfChannel: Number.isInteger(savedInput.restartCrsfChannel) && savedInput.restartCrsfChannel >= 4 && savedInput.restartCrsfChannel < 16 ? savedInput.restartCrsfChannel : null,
+  resetDroneButton: Number.isInteger(savedInput.resetDroneButton) && savedInput.resetDroneButton >= 0 && savedInput.resetDroneButton < 32 ? savedInput.resetDroneButton : null,
   axes: { yaw: 0, throttle: 1, roll: 2, pitch: 3, ...savedInput.axes },
   invert: { yaw: false, throttle: true, roll: true, pitch: true, ...savedInput.invert },
-  crsfChannels: { roll: 0, pitch: 1, throttle: 2, yaw: 3, ...savedInput.crsfChannels },
-  crsfOrder: savedInput.crsfOrder || 'AETR',
-  crsfInvert: { yaw: false, throttle: false, roll: true, pitch: true, ...savedInput.crsfInvert },
   centers: Array.isArray(savedInput.centers) ? savedInput.centers.slice(0, 8) : Array(8).fill(0),
+  axisRanges: Array.from({ length: 8 }, (_, index) => {
+    const range = savedInput.axisRanges?.[index];
+    return range && Number.isFinite(range.min) && Number.isFinite(range.max) && range.max - range.min >= 0.25
+      ? { min: THREE.MathUtils.clamp(range.min, -1, 1), max: THREE.MathUtils.clamp(range.max, -1, 1) }
+      : { min: -1, max: 1 };
+  }),
   deadzone: Number.isFinite(savedInput.deadzone) ? savedInput.deadzone : 0.06,
-  rateType: savedInput.rateType === 'actual' ? 'actual' : 'betaflight',
+  rateType: !shouldMigrateRateProfile && savedInput.rateType === 'actual' ? 'actual' : 'betaflight',
+  rateProfileVersion,
   rates: { betaflight: loadRateProfile('betaflight'), actual: loadRateProfile('actual') },
 };
-const serial = { port: null, reader: null, readTask: null, buffer: [], channels: null, lastPacketAt: 0 };
+if (shouldMigrateRateProfile) {
+  inputConfig.rates.betaflight = Object.fromEntries(
+    rateAxes.map((axis) => [axis, { ...defaultRateProfiles.betaflight[axis] }]),
+  );
+}
 let visibleGamepads = [];
 let gamepadSignature = '';
 let lastGamepad = null;
 let gamepadInput = null;
 let calibration = null;
-let calibrationButtonTimer = 0;
 let currentInputSource = '';
 let restartButtonCaptureUntil = 0;
-let previousRestartPadButtons = [];
-let previousRestartPadIndex = null;
+let resetDroneButtonCaptureUntil = 0;
+let previousGamepadButtons = [];
+let previousGamepadIndex = null;
 let restartPadButtonWasDown = false;
-let restartCrsfSwitchWasDown = false;
+let resetDronePadButtonWasDown = false;
 
 function saveInputSettings() {
   try { localStorage.setItem('aerframe-input-settings', JSON.stringify(inputConfig)); }
   catch { /* Storage is optional. */ }
 }
 
+if (shouldMigrateRateProfile) saveInputSettings();
+
 function syncRaceRestartControls(message = '') {
-  const button = document.querySelector('#bindRaceRestartButton');
-  const channelSelect = document.querySelector('#restartCrsfChannel');
+  const restartButton = document.querySelector('#bindRaceRestartButton');
+  const resetDroneButton = document.querySelector('#bindResetDroneButton');
   const status = document.querySelector('#restartBindingStatus');
-  if (channelSelect) channelSelect.value = inputConfig.restartCrsfChannel === null ? '-1' : String(inputConfig.restartCrsfChannel);
-  if (button) {
-    button.textContent = restartButtonCaptureUntil
+  if (restartButton) {
+    restartButton.textContent = restartButtonCaptureUntil
       ? 'PRESS A CONTROLLER BUTTON'
       : inputConfig.restartButton === null ? 'BIND CONTROLLER BUTTON' : `REBIND BUTTON ${inputConfig.restartButton + 1}`;
-    button.setAttribute('aria-pressed', String(Boolean(restartButtonCaptureUntil)));
+    restartButton.setAttribute('aria-pressed', String(Boolean(restartButtonCaptureUntil)));
+  }
+  if (resetDroneButton) {
+    resetDroneButton.textContent = resetDroneButtonCaptureUntil
+      ? 'PRESS A CONTROLLER BUTTON'
+      : inputConfig.resetDroneButton === null ? 'BIND CONTROLLER BUTTON' : `REBIND BUTTON ${inputConfig.resetDroneButton + 1}`;
+    resetDroneButton.setAttribute('aria-pressed', String(Boolean(resetDroneButtonCaptureUntil)));
   }
   if (status) {
-    const bindings = [];
-    if (inputConfig.restartButton !== null) bindings.push(`BUTTON ${inputConfig.restartButton + 1}`);
-    if (inputConfig.restartCrsfChannel !== null) bindings.push(`AUX ${inputConfig.restartCrsfChannel - 3}`);
-    status.textContent = message || `R IS ALWAYS AVAILABLE${bindings.length ? ` / ${bindings.join(' / ')}` : ''}`;
+    const raceBinding = inputConfig.restartButton === null ? 'BUTTON NOT BOUND' : `BUTTON ${inputConfig.restartButton + 1}`;
+    const droneBinding = inputConfig.resetDroneButton === null ? 'BUTTON NOT BOUND' : `BUTTON ${inputConfig.resetDroneButton + 1}`;
+    status.textContent = message || `R RESTARTS A SOLO RACE / RESTART RACE: ${raceBinding} / RESET DRONE: ${droneBinding}`;
   }
 }
 
@@ -7271,6 +7617,15 @@ function setSettingsTab(name) {
 
 settingsTabs.forEach((button) => button.addEventListener('click', () => setSettingsTab(button.dataset.settingsTab)));
 
+document.querySelector('#toggleStickSetup').addEventListener('click', (event) => {
+  const button = event.currentTarget;
+  const panel = document.querySelector('#stickSetupPanel');
+  const expanded = button.getAttribute('aria-expanded') !== 'true';
+  button.setAttribute('aria-expanded', String(expanded));
+  panel.hidden = !expanded;
+  button.querySelector('b').textContent = expanded ? '−' : '+';
+});
+
 function syncInputControls() {
   document.querySelectorAll('[data-axis-map]').forEach((select) => {
     select.value = String(inputConfig.axes[select.dataset.axisMap]);
@@ -7280,7 +7635,6 @@ function syncInputControls() {
   });
   document.querySelector('#deadzoneRange').value = String(inputConfig.deadzone);
   document.querySelector('#deadzoneValue').textContent = `${Math.round(inputConfig.deadzone * 100)}%`;
-  document.querySelector('#crsfOrder').value = inputConfig.crsfOrder;
   syncRaceRestartControls();
 }
 
@@ -7297,23 +7651,20 @@ document.querySelector('#gamepadSelect').addEventListener('change', (event) => {
   refreshGamepadList();
   refreshInputSource();
 });
-document.querySelector('#bindRaceRestartButton').addEventListener('click', () => {
+function beginControllerButtonCapture(action) {
   const pad = visibleGamepads.find((candidate) => candidate.index === inputConfig.gamepadIndex);
   if (!pad) {
-    showToast('Connect and select a controller before binding a restart button.');
-    return;
+    showToast('Connect and select a controller before binding a race control.');
+    return false;
   }
-  previousRestartPadButtons = pad.buttons.map((button) => Boolean(button.pressed));
-  restartButtonCaptureUntil = performance.now() + 12_000;
+  restartButtonCaptureUntil = action === 'restart' ? performance.now() + 12_000 : 0;
+  resetDroneButtonCaptureUntil = action === 'resetDrone' ? performance.now() + 12_000 : 0;
+  previousGamepadButtons = pad.buttons.map((button) => Boolean(button.pressed));
   syncRaceRestartControls('PRESS A BUTTON ON THE SELECTED CONTROLLER WITHIN 12 SECONDS.');
-});
-document.querySelector('#restartCrsfChannel').addEventListener('change', (event) => {
-  const channel = Number(event.currentTarget.value);
-  inputConfig.restartCrsfChannel = Number.isInteger(channel) && channel >= 4 && channel < 16 ? channel : null;
-  restartCrsfSwitchWasDown = false;
-  saveInputSettings();
-  syncRaceRestartControls('FLIP THE CHOSEN AUX SWITCH TO RESTART A SOLO RACE.');
-});
+  return true;
+}
+document.querySelector('#bindRaceRestartButton').addEventListener('click', () => beginControllerButtonCapture('restart'));
+document.querySelector('#bindResetDroneButton').addEventListener('click', () => beginControllerButtonCapture('resetDrone'));
 window.addEventListener('gamepadconnected', (event) => {
   if (inputConfig.gamepadIndex === null) inputConfig.gamepadIndex = event.gamepad.index;
   refreshGamepadList(true);
@@ -7334,13 +7685,6 @@ document.querySelectorAll('[data-axis-invert]').forEach((checkbox) => checkbox.a
   inputConfig.invert[event.currentTarget.dataset.axisInvert] = event.currentTarget.checked;
   saveInputSettings();
 }));
-document.querySelector('#crsfOrder').addEventListener('change', (event) => {
-  inputConfig.crsfOrder = event.currentTarget.value;
-  inputConfig.crsfChannels = event.currentTarget.value === 'TAER'
-    ? { throttle: 0, roll: 1, pitch: 2, yaw: 3 }
-    : { roll: 0, pitch: 1, throttle: 2, yaw: 3 };
-  saveInputSettings();
-});
 document.querySelector('#deadzoneRange').addEventListener('input', (event) => {
   inputConfig.deadzone = Number(event.currentTarget.value);
   document.querySelector('#deadzoneValue').textContent = `${Math.round(inputConfig.deadzone * 100)}%`;
@@ -7355,9 +7699,13 @@ document.querySelectorAll('[data-rate-input]').forEach((input) => input.addEvent
   const control = event.currentTarget;
   const card = control.closest('[data-rate-axis]');
   const mode = inputConfig.rateType;
-  const field = rateFieldForControl(mode, control.dataset.rateInput);
+  const controlName = control.dataset.rateInput;
+  const controlDefinition = rateControlFields[mode][controlName];
+  const rawValue = control.valueAsNumber;
+  if (!Number.isFinite(rawValue)) return;
+  const field = controlDefinition.field;
   const axisSettings = inputConfig.rates[mode][card.dataset.rateAxis];
-  axisSettings[field] = Number(control.value);
+  axisSettings[field] = THREE.MathUtils.clamp(rawValue, controlDefinition.min, controlDefinition.max);
   if (mode === 'actual' && field === 'centerRate') axisSettings.maxRate = Math.max(axisSettings.maxRate, axisSettings.centerRate);
   if (mode === 'actual' && field === 'maxRate') axisSettings.centerRate = Math.min(axisSettings.centerRate, axisSettings.maxRate);
   syncRateControls();
@@ -7368,78 +7716,73 @@ document.querySelector('#resetRates').addEventListener('click', () => {
   inputConfig.rates[mode] = Object.fromEntries(rateAxes.map((axis) => [axis, { ...defaultRateProfiles[mode][axis] }]));
   syncRateControls();
   saveInputSettings();
-  showToast(`${mode === 'actual' ? 'Actual' : 'Betaflight'} rates reset to their defaults.`);
+  showToast(`${mode === 'actual' ? 'Actual' : 'Betaflight'} rates reset to the default profile.`);
 });
 document.querySelector('#calibrateSticks').addEventListener('click', (event) => {
   if (!lastGamepad) {
     showToast('Connect and select a gamepad before calibrating its stick centers.');
     return;
   }
-  calibration = { frames: 0, centers: Array(lastGamepad.axes.length).fill(0) };
-  event.currentTarget.disabled = true;
-  event.currentTarget.textContent = 'KEEP STICKS CENTERED…';
-  showToast('Leave the sticks centered while calibration samples them.');
-  window.clearTimeout(calibrationButtonTimer);
-  calibrationButtonTimer = window.setTimeout(() => {
-    if (calibration) finishCalibration();
-  }, 1800);
+  calibration = {
+    stage: 'center',
+    gamepadIndex: lastGamepad.index,
+    frames: 0,
+    centers: Array(lastGamepad.axes.length).fill(0),
+    minimums: Array(lastGamepad.axes.length).fill(Infinity),
+    maximums: Array(lastGamepad.axes.length).fill(-Infinity),
+  };
+  syncTransmitterCalibrationDialog();
+  document.querySelector('#transmitterCalibrationDialog').showModal();
 });
 
-const connectSerialButton = document.querySelector('#connectSerial');
-const disconnectSerialButton = document.querySelector('#disconnectSerial');
-const serialSupported = Boolean(window.isSecureContext && navigator.serial?.requestPort);
-if (!serialSupported) {
-  connectSerialButton.disabled = true;
-  document.querySelector('#serialStatus').textContent = 'NOT AVAILABLE';
-  document.querySelector('#serialDetail').textContent = 'Web Serial needs Chrome or Edge on localhost / HTTPS. A standard gamepad works in more browsers.';
+function syncTransmitterCalibrationDialog() {
+  if (!calibration) return;
+  const centerStage = calibration.stage === 'center';
+  const step = document.querySelector('#transmitterCalibrationStep');
+  const title = document.querySelector('#transmitterCalibrationTitle');
+  const instructions = document.querySelector('#transmitterCalibrationInstructions');
+  const progress = document.querySelector('#transmitterCalibrationProgress');
+  const status = document.querySelector('#transmitterCalibrationStatus');
+  const action = document.querySelector('#calibrationAction');
+  step.textContent = centerStage ? 'STEP 1 OF 2' : 'STEP 2 OF 2';
+  title.textContent = centerStage ? 'Center the controls' : 'Sweep the full stick range';
+  instructions.textContent = centerStage
+    ? 'Hold the sticks centered and throttle at its minimum. Keep every control still while the center position is sampled.'
+    : 'Slowly move each stick to every edge and move the throttle from minimum to maximum. Keep moving until the progress bar finishes.';
+  progress.value = centerStage ? Math.min(calibration.frames, 90) : Math.min(calibration.frames, 180);
+  progress.max = centerStage ? 90 : 180;
+  if (centerStage) {
+    status.textContent = 'SAMPLING CENTER…';
+    action.disabled = true;
+    action.textContent = 'CAPTURING CENTER…';
+  } else {
+    status.textContent = calibration.frames >= 180 ? 'FULL RANGE CAPTURED · READY TO SAVE' : 'MOVE ALL STICKS THROUGH THEIR FULL TRAVEL…';
+    action.disabled = calibration.frames < 180;
+    action.textContent = action.disabled ? 'CAPTURING RANGE…' : 'FINISH & SAVE';
+  }
 }
 
-connectSerialButton.addEventListener('click', async () => {
-  if (!serialSupported) return showToast('Use Chrome or Edge on localhost / HTTPS for USB serial.');
-  try {
-    const port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 420000, dataBits: 8, stopBits: 1, parity: 'none', bufferSize: 512 });
-    serial.port = port;
-    serial.buffer = [];
-    serial.channels = null;
-    serial.lastPacketAt = 0;
-    serial.reader = port.readable.getReader();
-    serial.readTask = runSerialReader(port, serial.reader);
-    updateSerialStatus();
-    refreshInputSource();
-    showToast('Serial port open. Waiting for CRSF channel frames.');
-  } catch {
-    if (error.name !== 'NotFoundError') showToast(`Could not open transmitter: ${error.message || 'serial error'}`);
-  }
-});
+function cancelTransmitterCalibration() {
+  calibration = null;
+  document.querySelector('#transmitterCalibrationDialog').close();
+}
 
-disconnectSerialButton.addEventListener('click', async () => {
-  const reader = serial.reader;
-  if (!serial.port) return;
-  try { await reader?.cancel(); } catch { /* Device may already be unplugged. */ }
-  try { await serial.readTask; } catch { /* Reader shutdown is handled in its finalizer. */ }
-  if (serial.port) {
-    try { await serial.port.close(); } catch { /* The port may already be closed. */ }
-    serial.port = null;
-    serial.reader = null;
-    serial.channels = null;
-  }
-  updateSerialStatus();
-  refreshInputSource();
-  showToast('Transmitter disconnected.');
-});
-
-if (navigator.serial?.addEventListener) {
-  navigator.serial.addEventListener('disconnect', (event) => {
-    if (event.target === serial.port) {
-      serial.port = null;
-      serial.channels = null;
-      updateSerialStatus();
-      refreshInputSource();
-      showToast('Transmitter disconnected.');
-    }
+document.querySelector('#calibrationCancel').addEventListener('click', cancelTransmitterCalibration);
+document.querySelector('#transmitterCalibrationDialog').addEventListener('cancel', () => { calibration = null; });
+document.querySelector('#calibrationAction').addEventListener('click', () => {
+  if (!calibration || calibration.stage !== 'range' || calibration.frames < 180) return;
+  const mappedAxes = [...new Set(Object.values(inputConfig.axes).map(Number))];
+  const incompleteAxes = mappedAxes.filter((index) => {
+    const minimum = calibration.minimums[index];
+    const maximum = calibration.maximums[index];
+    return !Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum - minimum < 0.75;
   });
-}
+  if (incompleteAxes.length) {
+    document.querySelector('#transmitterCalibrationStatus').textContent = `AXIS ${incompleteAxes.map((axis) => axis + 1).join(', ')} DID NOT REACH FULL TRAVEL. KEEP MOVING, THEN SAVE AGAIN.`;
+    return;
+  }
+  finishCalibration();
+});
 
 function shapeStick(value) {
   const sign = Math.sign(value);
@@ -7464,10 +7807,6 @@ const rateControlFields = {
   },
 };
 
-function rateFieldForControl(mode, controlName) {
-  return rateControlFields[mode][controlName].field;
-}
-
 function rateToDegrees(axis, input) {
   const command = THREE.MathUtils.clamp(Number(input) || 0, -1, 1);
   const magnitude = Math.abs(command);
@@ -7491,45 +7830,159 @@ function rateToDegrees(axis, input) {
   return THREE.MathUtils.clamp(degreesPerSecond, -1998, 1998);
 }
 
+const ratePreviewColors = { roll: '#68dff7', pitch: '#86e7b2', yaw: '#ffbd72' };
+
+function renderRatePreview() {
+  const canvas = document.querySelector('#ratePreviewCanvas');
+  if (!canvas) return;
+  const width = canvas.clientWidth;
+  if (!width) return;
+  const height = canvas.clientHeight || 190;
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * pixelRatio);
+  canvas.height = Math.round(height * pixelRatio);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    console.error('Unable to render the rates preview because its canvas context is unavailable.');
+    return;
+  }
+  context.scale(pixelRatio, pixelRatio);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = 'rgba(4, 14, 28, .72)';
+  context.fillRect(0, 0, width, height);
+
+  const plot = { left: 39, right: width - 12, top: 18, bottom: height - 18 };
+  const plotWidth = plot.right - plot.left;
+  const plotHeight = plot.bottom - plot.top;
+  const maxVelocity = Math.max(...rateAxes.map((axis) => Math.abs(rateToDegrees(axis, 1))), 100);
+  const scale = Math.ceil(maxVelocity / 100) * 100;
+  const scaleLabel = document.querySelector('#ratePreviewScale');
+  if (scaleLabel) scaleLabel.textContent = `±${scale} DEG/S`;
+
+  context.font = '9px monospace';
+  context.textAlign = 'right';
+  context.textBaseline = 'middle';
+  for (let tick = -2; tick <= 2; tick += 1) {
+    const y = plot.top + ((2 - tick) / 4) * plotHeight;
+    context.beginPath();
+    context.strokeStyle = tick === 0 ? 'rgba(179, 215, 232, .4)' : 'rgba(146, 190, 210, .12)';
+    context.lineWidth = tick === 0 ? 1.2 : 1;
+    context.moveTo(plot.left, y);
+    context.lineTo(plot.right, y);
+    context.stroke();
+    context.fillStyle = 'rgba(190, 216, 230, .65)';
+    context.fillText(String(Math.round(scale * tick / 2)), plot.left - 7, y);
+  }
+  for (let tick = -2; tick <= 2; tick += 1) {
+    const x = plot.left + ((tick + 2) / 4) * plotWidth;
+    context.beginPath();
+    context.strokeStyle = tick === 0 ? 'rgba(179, 215, 232, .4)' : 'rgba(146, 190, 210, .12)';
+    context.lineWidth = tick === 0 ? 1.2 : 1;
+    context.moveTo(x, plot.top);
+    context.lineTo(x, plot.bottom);
+    context.stroke();
+    context.fillStyle = 'rgba(190, 216, 230, .55)';
+    context.textAlign = tick === -2 ? 'left' : tick === 2 ? 'right' : 'center';
+    context.textBaseline = 'top';
+    context.fillText(`${tick * 50}%`, x, plot.bottom + 5);
+  }
+
+  for (const axis of rateAxes) {
+    context.beginPath();
+    context.strokeStyle = ratePreviewColors[axis];
+    context.lineWidth = 2;
+    context.lineJoin = 'round';
+    for (let sample = 0; sample <= 100; sample += 1) {
+      const command = sample / 50 - 1;
+      const velocity = rateToDegrees(axis, command);
+      const x = plot.left + (sample / 100) * plotWidth;
+      const y = plot.top + ((scale - velocity) / (2 * scale)) * plotHeight;
+      if (sample === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    }
+    context.stroke();
+  }
+}
+
 function syncRateControls() {
   const mode = inputConfig.rateType;
   const definition = rateControlFields[mode];
   const modeSelect = document.querySelector('#rateTypeSelect');
   modeSelect.value = mode;
   document.querySelector('#rateModeHelp').textContent = definition.help;
-  document.querySelectorAll('[data-rate-axis]').forEach((card) => {
-    const axis = card.dataset.rateAxis;
+  document.querySelectorAll('[data-rate-column]').forEach((column) => {
+    column.textContent = definition[column.dataset.rateColumn].label;
+  });
+  document.querySelectorAll('.rate-table-row[data-rate-axis]').forEach((row) => {
+    const axis = row.dataset.rateAxis;
     for (const controlName of ['primary', 'secondary', 'expo']) {
       const controlDefinition = definition[controlName];
       const field = controlDefinition.field;
       const value = inputConfig.rates[mode][axis][field];
-      const slider = card.querySelector(`[data-rate-input="${controlName}"]`);
-      const label = card.querySelector(`[data-rate-label="${controlName}"]`);
-      const output = card.querySelector(`[data-rate-value="${controlName}"]`);
-      slider.min = String(controlDefinition.min);
-      slider.max = String(controlDefinition.max);
-      slider.step = String(controlDefinition.step);
-      slider.value = String(value);
-      if (label) label.textContent = controlDefinition.label;
-      output.textContent = mode === 'actual' && controlName !== 'expo'
-        ? `${Math.round(value)}°/s`
-        : controlName === 'primary' && mode === 'betaflight'
-          ? Number(value).toFixed(2)
-          : `${Math.round(value * 100)}%`;
+      const input = row.querySelector(`[data-rate-input="${controlName}"]`);
+      const label = row.querySelector(`[data-rate-label="${controlName}"]`);
+      input.min = String(controlDefinition.min);
+      input.max = String(controlDefinition.max);
+      input.step = String(controlDefinition.step);
+      input.value = String(value);
+      if (label) label.textContent = `${axis} ${controlDefinition.label.toLowerCase()}`;
     }
-    const bfRate = inputConfig.rates.betaflight[axis].rate;
-    const adjustedBfRate = bfRate > 2 ? bfRate + 14.54 * (bfRate - 2) : bfRate;
-    const centerRate = mode === 'actual' ? inputConfig.rates.actual[axis].centerRate : 200 * adjustedBfRate;
+    if (mode === 'actual') {
+      row.querySelector('[data-rate-input="primary"]').max = String(inputConfig.rates.actual[axis].maxRate);
+      row.querySelector('[data-rate-input="secondary"]').min = String(inputConfig.rates.actual[axis].centerRate);
+    }
     const maxRate = rateToDegrees(axis, 1);
-    card.querySelector(`[data-rate-summary="${axis}"]`).textContent = `${Math.round(centerRate)} / ${Math.round(maxRate)} °/s`;
+    row.querySelector(`[data-rate-summary="${axis}"]`).textContent = String(Math.round(maxRate));
   });
+  renderRatePreview();
 }
 syncRateControls();
+function syncFlightTuneControls() {
+  document.querySelectorAll('[data-flight-tune]').forEach((input) => {
+    const field = input.dataset.flightTune;
+    const value = flightTune[field];
+    input.value = String(value);
+  });
+  document.querySelectorAll('[data-flight-pid]').forEach((input) => {
+    input.value = String(flightTune[input.dataset.flightPid]);
+  });
+}
+syncFlightTuneControls();
+document.querySelectorAll('[data-flight-tune]').forEach((input) => input.addEventListener('change', () => {
+  const field = input.dataset.flightTune;
+  const [min, max] = flightTuneRanges[field];
+  const value = input.valueAsNumber;
+  if (!Number.isFinite(value)) return;
+  flightTune[field] = THREE.MathUtils.clamp(value, min, max);
+  input.value = String(flightTune[field]);
+  saveSettings();
+}));
+document.querySelectorAll('[data-flight-pid]').forEach((input) => input.addEventListener('change', () => {
+  const field = input.dataset.flightPid;
+  const [min, max] = flightTuneRanges[field];
+  const value = input.valueAsNumber;
+  if (!Number.isFinite(value)) return;
+  flightTune[field] = THREE.MathUtils.clamp(value, min, max);
+  input.value = String(flightTune[field]);
+  saveSettings();
+}));
+document.querySelector('#resetFlightTune').addEventListener('click', () => {
+  Object.assign(flightTune, flightTuneDefaults);
+  syncFlightTuneControls();
+  renderRatePreview();
+  saveSettings();
+  showToast('Flight tune reset to defaults.');
+});
+window.addEventListener('resize', renderRatePreview);
+if ('ResizeObserver' in window) {
+  new ResizeObserver(renderRatePreview).observe(document.querySelector('#ratePreviewCanvas'));
+}
 
 function normalizedGamepadAxis(raw, index) {
   const center = Number(inputConfig.centers[index]) || 0;
   const difference = raw - center;
-  const range = difference < 0 ? 1 + center : 1 - center;
+  const calibratedRange = inputConfig.axisRanges[index] || { min: -1, max: 1 };
+  const range = difference < 0 ? center - calibratedRange.min : calibratedRange.max - center;
   return THREE.MathUtils.clamp(difference / Math.max(range, 0.15), -1, 1);
 }
 
@@ -7581,145 +8034,82 @@ function refreshGamepadList(notify = false) {
 function pollRestartGamepadButtons(pad) {
   if (restartButtonCaptureUntil && performance.now() >= restartButtonCaptureUntil) {
     restartButtonCaptureUntil = 0;
-    syncRaceRestartControls('BUTTON BINDING TIMED OUT. R IS ALWAYS AVAILABLE.');
+    syncRaceRestartControls('RACE RESTART BINDING TIMED OUT. R IS ALWAYS AVAILABLE.');
+  }
+  if (resetDroneButtonCaptureUntil && performance.now() >= resetDroneButtonCaptureUntil) {
+    resetDroneButtonCaptureUntil = 0;
+    syncRaceRestartControls('RESET DRONE BINDING TIMED OUT.');
   }
   if (!pad) {
-    previousRestartPadButtons = [];
-    previousRestartPadIndex = null;
+    previousGamepadButtons = [];
+    previousGamepadIndex = null;
     restartPadButtonWasDown = false;
+    resetDronePadButtonWasDown = false;
     return;
   }
-  if (previousRestartPadIndex !== pad.index) {
-    previousRestartPadButtons = [];
-    previousRestartPadIndex = pad.index;
+  if (previousGamepadIndex !== pad.index) {
+    previousGamepadButtons = [];
+    previousGamepadIndex = pad.index;
     restartPadButtonWasDown = false;
+    resetDronePadButtonWasDown = false;
   }
 
   const buttonStates = pad.buttons.map((button) => Boolean(button.pressed));
   let justBound = false;
-  if (restartButtonCaptureUntil) {
-    const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousRestartPadButtons[index]);
+  if (restartButtonCaptureUntil || resetDroneButtonCaptureUntil) {
+    const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
     if (pressedIndex >= 0) {
-      inputConfig.restartButton = pressedIndex;
-      restartButtonCaptureUntil = 0;
-      restartPadButtonWasDown = true;
+      if (restartButtonCaptureUntil) {
+        inputConfig.restartButton = pressedIndex;
+        if (inputConfig.resetDroneButton === pressedIndex) inputConfig.resetDroneButton = null;
+        restartButtonCaptureUntil = 0;
+        restartPadButtonWasDown = true;
+        syncRaceRestartControls(`CONTROLLER BUTTON ${pressedIndex + 1} BOUND TO RESTART RACE.`);
+      } else {
+        inputConfig.resetDroneButton = pressedIndex;
+        if (inputConfig.restartButton === pressedIndex) inputConfig.restartButton = null;
+        resetDroneButtonCaptureUntil = 0;
+        resetDronePadButtonWasDown = true;
+        syncRaceRestartControls(`CONTROLLER BUTTON ${pressedIndex + 1} BOUND TO RESET DRONE.`);
+      }
       justBound = true;
       saveInputSettings();
-      syncRaceRestartControls(`CONTROLLER BUTTON ${pressedIndex + 1} BOUND. R STILL WORKS.`);
     }
   }
 
-  const mappedButtonDown = inputConfig.restartButton !== null && Boolean(buttonStates[inputConfig.restartButton]);
-  if (!justBound && mappedButtonDown && !restartPadButtonWasDown) restartLocalRace('controller');
-  restartPadButtonWasDown = mappedButtonDown;
-  previousRestartPadButtons = buttonStates;
-}
-
-function decodeCrsfChannels(payload) {
-  const channels = [];
-  let accumulator = 0;
-  let bits = 0;
-  for (const byte of payload) {
-    accumulator |= byte << bits;
-    bits += 8;
-    while (bits >= 11 && channels.length < 16) {
-      channels.push(accumulator & 0x7ff);
-      accumulator >>>= 11;
-      bits -= 11;
-    }
-  }
-  return channels;
-}
-
-function crsfCrc8(bytes) {
-  let crc = 0;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 0x80) ? ((crc << 1) ^ 0xd5) & 0xff : (crc << 1) & 0xff;
-  }
-  return crc;
-}
-
-function parseCrsfBytes(value) {
-  for (const byte of value) serial.buffer.push(byte);
-  while (serial.buffer.length >= 2) {
-    const frameLength = serial.buffer[1];
-    if (frameLength < 2 || frameLength > 62) {
-      serial.buffer.shift();
-      continue;
-    }
-    const frameSize = frameLength + 2;
-    if (serial.buffer.length < frameSize) break;
-    const frame = serial.buffer.splice(0, frameSize);
-    if (crsfCrc8(frame.slice(2, frameSize - 1)) !== frame[frameSize - 1]) continue;
-    if (frame[2] !== 0x16 || frameLength !== 24) continue;
-    const channels = decodeCrsfChannels(frame.slice(3, 25));
-    if (channels.length === 16) {
-      serial.channels = channels;
-      serial.lastPacketAt = performance.now();
-    }
-  }
-}
-
-function updateSerialStatus() {
-  const connected = Boolean(serial.port);
-  const live = connected && performance.now() - serial.lastPacketAt < 600;
-  const led = document.querySelector('#serialLed');
-  const status = document.querySelector('#serialStatus');
-  const detail = document.querySelector('#serialDetail');
-  led.classList.toggle('is-connected', live);
-  led.classList.toggle('is-waiting', connected && !live);
-  status.textContent = live ? 'CRSF LINK' : connected ? 'WAITING FOR DATA' : 'OPTIONAL';
-  if (connected) {
-    detail.textContent = live ? 'CRSF channel frames received · 420,000 baud · AETR channel order.' : 'Port open. Waiting for valid CRSF RC channel frames.';
-  }
-  document.querySelector('#connectSerial').hidden = connected;
-  document.querySelector('#disconnectSerial').hidden = !connected;
-  return live;
-}
-
-async function runSerialReader(port, reader) {
-  try {
-    while (serial.port === port) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) parseCrsfBytes(value);
-    }
-  } catch (error) {
-    if (serial.port === port) showToast(`Transmitter read stopped: ${error.message || 'serial error'}`);
-  } finally {
-    try { reader.releaseLock(); } catch { /* Reader may already be released. */ }
-    if (serial.port === port) {
-      serial.reader = null;
-      try { await port.close(); } catch { /* The device may have been unplugged. */ }
-      serial.port = null;
-      serial.channels = null;
-      updateSerialStatus();
-      refreshInputSource();
-    }
-  }
+  const restartButtonDown = inputConfig.restartButton !== null && Boolean(buttonStates[inputConfig.restartButton]);
+  const resetDroneButtonDown = inputConfig.resetDroneButton !== null && Boolean(buttonStates[inputConfig.resetDroneButton]);
+  if (!justBound && restartButtonDown && !restartPadButtonWasDown) restartLocalRace('controller');
+  if (!justBound && resetDroneButtonDown && !resetDronePadButtonWasDown) resetDrone('controller');
+  restartPadButtonWasDown = restartButtonDown;
+  resetDronePadButtonWasDown = resetDroneButtonDown;
+  previousGamepadButtons = buttonStates;
 }
 
 function refreshInputSource() {
-  const serialLive = serial.port && performance.now() - serial.lastPacketAt < 600;
-  const source = serialLive ? 'CRSF TRANSMITTER' : lastGamepad ? 'GAMEPAD / TRANSMITTER' : 'KEYBOARD';
+  const source = lastGamepad ? 'GAMEPAD / TRANSMITTER' : 'KEYBOARD';
   if (source === currentInputSource) return;
   currentInputSource = source;
   document.querySelector('#inputSourceLabel').textContent = `ACTIVE INPUT / ${source}`;
   document.querySelector('#flightInputLabel').textContent = source;
-  document.querySelector('#statusText').textContent = flying ? `FLIGHT // ${source}` : 'FLIGHT SYSTEMS READY';
+  document.querySelector('#statusText').textContent = flying ? `FLIGHT // ${source}` : 'READY';
 }
 
 function finishCalibration() {
   if (!calibration) return;
-  const samples = Math.max(calibration.frames, 1);
-  calibration.centers.forEach((sum, index) => { inputConfig.centers[index] = sum / samples; });
+  const samples = 90;
+  calibration.centers.forEach((sum, index) => {
+    inputConfig.centers[index] = sum / samples;
+    const minimum = calibration.minimums[index];
+    const maximum = calibration.maximums[index];
+    if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum - minimum >= 0.25) {
+      inputConfig.axisRanges[index] = { min: minimum, max: maximum };
+    }
+  });
   calibration = null;
-  const button = document.querySelector('#calibrateSticks');
-  button.disabled = false;
-  button.textContent = 'CALIBRATE CENTER';
+  document.querySelector('#transmitterCalibrationDialog').close();
   saveInputSettings();
-  showToast('Stick centers saved. Move the sticks to check the live meters.');
+  showToast('Transmitter calibration saved. Stick centers and full travel ranges are ready.');
 }
 
 function sampleGamepad() {
@@ -7736,14 +8126,42 @@ function sampleGamepad() {
   lastGamepad = pad;
   gamepadInput = null;
   pollRestartGamepadButtons(pad);
-  if (!pad) return;
+  if (!pad) {
+    if (calibration) {
+      calibration = null;
+      document.querySelector('#transmitterCalibrationStatus').textContent = 'CONTROLLER DISCONNECTED. CANCEL AND RECONNECT TO START AGAIN.';
+      document.querySelector('#calibrationAction').disabled = true;
+    }
+    return;
+  }
 
   if (calibration) {
-    for (let index = 0; index < Math.min(pad.axes.length, calibration.centers.length); index += 1) {
-      calibration.centers[index] += pad.axes[index];
+    if (pad.index !== calibration.gamepadIndex) {
+      calibration = null;
+      document.querySelector('#transmitterCalibrationStatus').textContent = 'ACTIVE CONTROLLER CHANGED. CANCEL AND START CALIBRATION AGAIN.';
+      document.querySelector('#calibrationAction').disabled = true;
+    } else if (calibration.stage === 'center') {
+      for (let index = 0; index < Math.min(pad.axes.length, calibration.centers.length); index += 1) {
+        calibration.centers[index] += pad.axes[index];
+      }
+      calibration.frames += 1;
+      if (calibration.frames >= 90) {
+        calibration.stage = 'range';
+        calibration.frames = 0;
+        for (let index = 0; index < Math.min(pad.axes.length, calibration.minimums.length); index += 1) {
+          calibration.minimums[index] = pad.axes[index];
+          calibration.maximums[index] = pad.axes[index];
+        }
+      }
+      syncTransmitterCalibrationDialog();
+    } else {
+      for (let index = 0; index < Math.min(pad.axes.length, calibration.minimums.length); index += 1) {
+        calibration.minimums[index] = Math.min(calibration.minimums[index], pad.axes[index]);
+        calibration.maximums[index] = Math.max(calibration.maximums[index], pad.axes[index]);
+      }
+      calibration.frames += 1;
+      syncTransmitterCalibrationDialog();
     }
-    calibration.frames += 1;
-    if (calibration.frames >= 60) finishCalibration();
   }
 
   const centered = {};
@@ -7769,39 +8187,6 @@ function sampleGamepad() {
   if (throttleMeter) throttleMeter.style.transform = `translateX(${Math.round((live.throttle - 0.5) * 40)}px)`;
 }
 
-function readCrsfInput() {
-  if (!serial.port || !serial.channels || performance.now() - serial.lastPacketAt > 600) return null;
-  const roleValue = (role) => {
-    const channel = inputConfig.crsfChannels[role];
-    const raw = serial.channels[channel] ?? 992;
-    if (role === 'throttle') {
-      const value = THREE.MathUtils.clamp((raw - 172) / (1811 - 172), 0, 1);
-      return inputConfig.crsfInvert.throttle ? 1 - value : value;
-    }
-    const centered = THREE.MathUtils.clamp((raw - 992) / 820, -1, 1);
-    return shapeStick(centered) * (inputConfig.crsfInvert[role] ? -1 : 1);
-  };
-  return {
-    yaw: roleValue('yaw'),
-    pitch: roleValue('pitch'),
-    roll: roleValue('roll'),
-    throttle: roleValue('throttle'),
-    source: 'CRSF TRANSMITTER',
-  };
-}
-
-function pollRestartCrsfSwitch() {
-  const channelIndex = inputConfig.restartCrsfChannel;
-  const signalFresh = channelIndex !== null
-    && serial.port
-    && serial.channels
-    && performance.now() - serial.lastPacketAt <= 600;
-  const channelValue = signalFresh ? Number(serial.channels[channelIndex]) || 0 : 0;
-  const switchDown = Boolean(signalFresh) && (restartCrsfSwitchWasDown ? channelValue > 1450 : channelValue > 1600);
-  if (switchDown && !restartCrsfSwitchWasDown) restartLocalRace('transmitter');
-  restartCrsfSwitchWasDown = switchDown;
-}
-
 function readKeyboardInput() {
   return {
     pitch: Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')),
@@ -7818,13 +8203,12 @@ function keyboardOverrideActive(input) {
 
 function getFlightInput() {
   const keyboard = readKeyboardInput();
-  const transmitter = readCrsfInput();
-  const chosen = keyboardOverrideActive(keyboard) ? keyboard : transmitter || gamepadInput || keyboard;
+  const chosen = keyboardOverrideActive(keyboard) ? keyboard : gamepadInput || keyboard;
   if (chosen.source !== currentInputSource) {
     currentInputSource = chosen.source;
     document.querySelector('#inputSourceLabel').textContent = `ACTIVE INPUT / ${chosen.source}`;
     document.querySelector('#flightInputLabel').textContent = chosen.source;
-    document.querySelector('#statusText').textContent = flying ? `FLIGHT // ${chosen.source}` : 'FLIGHT SYSTEMS READY';
+    document.querySelector('#statusText').textContent = flying ? `FLIGHT // ${chosen.source}` : 'READY';
   }
   return chosen;
 }
@@ -7842,6 +8226,7 @@ function saveSettings() {
       dronePropColor,
       soundEnabled,
       audioVolume,
+      flightTune,
     }));
   } catch { /* Private browsing can disable local storage. */ }
 }
@@ -7874,7 +8259,6 @@ function updateAccountUI() {
   rankEmblem.setAttribute('aria-label', `${rank.toUpperCase()} pilot rank, level ${pilotLevel}`);
   rankEmblem.title = `${rank.toUpperCase()} PILOT RANK`;
   const badgeName = document.querySelector('#pilotBadgeName');
-  const badgeState = document.querySelector('#pilotBadgeState');
   const badgeInitial = document.querySelector('#pilotBadgeInitial');
   if (signedInUser?.email) {
     const emailName = signedInUser.email.split('@')[0];
@@ -7883,7 +8267,6 @@ function updateAccountUI() {
     accountButton.title = 'Pilot account settings';
     accountButton.setAttribute('aria-label', 'Open pilot account settings');
     badgeName.textContent = pilotName.toUpperCase();
-    badgeState.textContent = 'PILOT ACCOUNT';
     badgeInitial.textContent = (pilotName[0] || 'P').toUpperCase();
     document.querySelector('#authSignedInName').textContent = `PILOT / ${pilotName}`;
     document.querySelector('#authSignedInEmail').textContent = signedInUser.email;
@@ -7892,7 +8275,6 @@ function updateAccountUI() {
     accountButton.title = 'Play as a guest, or create a free account to save your pilot profile and join online teams.';
     accountButton.setAttribute('aria-label', 'Sign in or create a free pilot account');
     badgeName.textContent = 'GUEST PILOT';
-    badgeState.textContent = 'SIGN IN TO SAVE FLIGHTS';
     badgeInitial.textContent = '•';
   }
 }
@@ -8317,8 +8699,24 @@ function updatePodiumInvitePositions() {
   });
 }
 
+function hasOtherPartyMembers(lobby = partyLobby) {
+  return Boolean(lobby && lobby.members.length > 1);
+}
+
+function syncMenuChoiceAvailability() {
+  const crewInLobby = hasOtherPartyMembers();
+  document.querySelectorAll('[data-menu-choice]').forEach((button) => {
+    const locked = crewInLobby && button.dataset.menuChoice !== 'multiplayer';
+    button.disabled = locked;
+    button.setAttribute('aria-disabled', String(locked));
+    if (locked) button.title = 'Only Multiplayer is available while other pilots are in your lobby.';
+    else button.removeAttribute('title');
+  });
+}
+
 function updatePartyUI(lobby = partyLobby) {
   partyLobby = lobby || null;
+  syncMenuChoiceAvailability();
   rememberRecentPartyPilots(partyLobby);
   if (!partyLobby || partyLobby.status !== 'open' || !partyLobby.results?.length) {
     lastSettledRaceProgressKey = '';
@@ -8418,6 +8816,7 @@ function syncRelayFlightState() {
       flight.position.copy(launchPadState.position);
       flight.velocity.set(0, 0, 0);
       flight.acceleration.set(0, 0, 0);
+      resetFlightControllerState();
       flight.orientation.setFromAxisAngle(axisY, launchPadState.heading);
       flight.throttle = 0;
       flight.speed = 0;
@@ -8780,7 +9179,7 @@ function renderTeamLeaderboard(leaders = []) {
   if (!leaders.length) {
     const empty = document.createElement('li');
     empty.className = 'team-rank-empty';
-    empty.textContent = 'No teams ranked yet. Create one and start racing.';
+    empty.textContent = 'No teams ranked yet.';
     list.append(empty);
     return;
   }
@@ -9174,7 +9573,7 @@ function setBuilderGameMode(mode, biomeId = activeBiome, persist = true) {
   const modeSelect = document.querySelector('#builderLaunchMode');
   if (modeSelect) modeSelect.value = mode;
   const modeSummary = document.querySelector('#builderModeSummary');
-  if (modeSummary) modeSummary.textContent = `SELECTED GAME MODE / ${builderGameModeLabels[mode].toUpperCase()}`;
+  if (modeSummary) modeSummary.textContent = `${builderGameModeLabels[mode].toUpperCase()} MODE`;
   updateBuilderAssetLibrary(mode);
   updateBuilderDisplay();
   if (!publishingBuilderTrack) setBuilderPublishMessage(builderTrackRequirementsMessage());
@@ -9548,6 +9947,10 @@ function setPage(page) {
 navButtons.forEach((button) => button.addEventListener('click', () => setPage(button.dataset.page)));
 document.querySelectorAll('[data-menu-choice]').forEach((button) => button.addEventListener('click', () => {
   const choice = button.dataset.menuChoice;
+  if (hasOtherPartyMembers()) {
+    if (choice === 'multiplayer' && currentPage !== 'multiplayer') setPage('multiplayer');
+    return;
+  }
   setPage(['trackPicker', 'multiplayer', 'builderMenu', 'communityTracks'].includes(choice) && currentPage === choice ? 'singleplayer' : choice);
 }));
 const menuChoiceStrip = document.querySelector('#menuChoiceStrip');
@@ -9611,16 +10014,10 @@ document.querySelector('#settingsButton').addEventListener('click', () => {
     return;
   }
   pageBeforeSettings = currentPage;
-  if (flying) setSettingsTab('camera');
+  if (flying) setSettingsTab('tune');
   setPage('settings');
 });
 document.querySelector('#closeSettingsPanel').addEventListener('click', () => setPage(pageBeforeSettings));
-function returnToMainMenu() {
-  if (flying) exitFlight();
-  pageBeforeSettings = 'singleplayer';
-  setPage('singleplayer');
-}
-document.querySelector('#settingsMenuButton').addEventListener('click', returnToMainMenu);
 document.querySelectorAll('[data-open-builder]').forEach((button) => button.addEventListener('click', () => setPage('builderMenu')));
 document.querySelector('#builderLaunchMode').addEventListener('change', (event) => {
   setBuilderGameMode(event.currentTarget.value, document.querySelector('#builderLaunchBiome').value);
@@ -9668,6 +10065,7 @@ document.querySelector('#builderSettingsClose').addEventListener('click', () => 
 
 const keys = new Set();
 const previousFlightPosition = new THREE.Vector3();
+const previousFlightOrientation = new THREE.Quaternion();
 let flightCourseEntries = [];
 let activeFlightCourseName = '';
 let builderTestCourse = false;
@@ -9681,21 +10079,50 @@ const flight = {
   velocity: new THREE.Vector3(),
   acceleration: new THREE.Vector3(),
   orientation: new THREE.Quaternion(),
+  impactAngularVelocity: new THREE.Vector3(),
+  propwashPhase: 0,
+  impactAngularStep: new THREE.Quaternion(),
+  impactAngularAxis: new THREE.Vector3(),
+  bodyAngularVelocity: new THREE.Vector3(),
+  previousBodyAngularVelocity: new THREE.Vector3(),
+  angularRateTarget: new THREE.Vector3(),
+  angularRateError: new THREE.Vector3(),
+  angularRateIntegral: new THREE.Vector3(),
+  measuredAngularAcceleration: new THREE.Vector3(),
+  filteredAngularAcceleration: new THREE.Vector3(),
+  pidAngularAcceleration: new THREE.Vector3(),
+  motorAngularAcceleration: new THREE.Vector3(),
+  angularStep: new THREE.Quaternion(),
+  angularAxis: new THREE.Vector3(),
+  motorOutput: 0,
   up: new THREE.Vector3(),
-  cameraTilt: new THREE.Quaternion(),
-  pitchStep: new THREE.Quaternion(),
-  yawStep: new THREE.Quaternion(),
-  rollStep: new THREE.Quaternion(),
   worldUp: new THREE.Vector3(0, 1, 0),
   throttle: 0.54,
   speed: 0,
 };
+const flightSpawnPosition = new THREE.Vector3();
+const flightSpawnOrientation = new THREE.Quaternion();
 const cameraAngleQuat = new THREE.Quaternion();
 const axisX = new THREE.Vector3(1, 0, 0);
 const axisY = new THREE.Vector3(0, 1, 0);
 const axisZ = new THREE.Vector3(0, 0, 1);
 const camOffset = new THREE.Vector3(0, 0.08, 0);
-const maxThrust = 34;
+const flightPropwashForce = new THREE.Vector3();
+
+function resetFlightControllerState() {
+  flight.impactAngularVelocity.set(0, 0, 0);
+  flight.bodyAngularVelocity.set(0, 0, 0);
+  flight.previousBodyAngularVelocity.set(0, 0, 0);
+  flight.angularRateTarget.set(0, 0, 0);
+  flight.angularRateError.set(0, 0, 0);
+  flight.angularRateIntegral.set(0, 0, 0);
+  flight.measuredAngularAcceleration.set(0, 0, 0);
+  flight.filteredAngularAcceleration.set(0, 0, 0);
+  flight.pidAngularAcceleration.set(0, 0, 0);
+  flight.motorAngularAcceleration.set(0, 0, 0);
+  flight.motorOutput = 0;
+  flight.propwashPhase = 0;
+}
 
 const builderGateFlightCenterY = 2.1;
 
@@ -9735,7 +10162,6 @@ function updateRaceTimerDisplay(now = performance.now()) {
   if (restartHint) {
     const bindings = ['R'];
     if (inputConfig.restartButton !== null) bindings.push(`B${inputConfig.restartButton + 1}`);
-    if (inputConfig.restartCrsfChannel !== null) bindings.push(`AUX ${inputConfig.restartCrsfChannel - 3}`);
     restartHint.textContent = `${bindings.join(' / ')} TO RESTART`;
     restartHint.hidden = !raceTimerEnabled || isMultiplayerRaceActive();
   }
@@ -9869,14 +10295,26 @@ function prepareBuilderTestCourse() {
   clearChildren(builderFlightRoot);
   launchPadState = null;
   const entries = [];
-  for (const data of orderedBuilderGates()) {
+  for (const slot of orderedBuilderGates()) {
+    const data = slot.gate;
     const gate = customGateObjects.find((object) => object.userData.gateId === data.id);
     if (!gate) continue;
     const indicator = createGateIndicator(gate);
-    indicator.position.y = builderGateFlightCenterY;
-    gate.userData.flightIndicator = indicator;
-    const role = data.isStartFinish ? 'START / FINISH' : `GATE ${data.routeOrder}`;
-    entries.push(makeFlightGateEntry(gate, role, 2.05, indicator, builderGateFlightCenterY, data.routeOrder, data.isStartFinish));
+    let centerY = builderGateFlightCenterY;
+    if (slot.openingIndex !== null) {
+      const plane = gate.userData.gatePassPlanes[slot.openingIndex];
+      indicator.position.copy(plane.point);
+      indicator.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), plane.normal);
+      centerY = plane.point.y;
+    } else {
+      indicator.position.y = centerY;
+    }
+    gate.userData.flightIndicators ||= [];
+    gate.userData.flightIndicators.push(indicator);
+    const role = slot.isStartFinish ? 'START / FINISH' : `GATE ${slot.routeOrder}`;
+    const entry = makeFlightGateEntry(gate, role, 2.05, indicator, centerY, slot.routeOrder, slot.isStartFinish);
+    entry.planeIndex = slot.openingIndex;
+    entries.push(entry);
   }
   const startEntry = entries.find((entry) => entry.isStartFinish);
   if (startEntry) setupRaceLaunchPodium(startEntry, builderFlightRoot, builderPropObjects);
@@ -9887,12 +10325,12 @@ function prepareBuilderTestCourse() {
 
 function clearBuilderTestCourse() {
   customGateObjects.forEach((gate) => {
-    const indicator = gate.userData.flightIndicator;
-    if (!indicator) return;
-    gate.remove(indicator);
-    indicator.geometry.dispose();
-    indicator.material.dispose();
-    delete gate.userData.flightIndicator;
+    (gate.userData.flightIndicators || []).forEach((indicator) => {
+      gate.remove(indicator);
+      indicator.geometry.dispose();
+      indicator.material.dispose();
+    });
+    delete gate.userData.flightIndicators;
   });
   clearChildren(builderFlightRoot);
   builderFlightRoot.visible = false;
@@ -9920,7 +10358,8 @@ function repeatCourseEntries(baseEntries, lapCount) {
     checkpoints.forEach((entry, checkpointIndex) => {
       const indicator = lap === 0 ? entry.indicator : createGateIndicator(entry.object);
       if (lap > 0) {
-        indicator.position.y = entry.centerY;
+        indicator.position.copy(entry.indicator.position);
+        indicator.quaternion.copy(entry.indicator.quaternion);
         indicator.visible = false;
         repeatCourseIndicators.push(indicator);
       } else {
@@ -9929,7 +10368,8 @@ function repeatCourseEntries(baseEntries, lapCount) {
       entries.push({ ...entry, role: `GATE ${entry.routeNumber || checkpointIndex + 1} / LAP ${lap + 1}`, indicator, passed: false });
     });
     const finishIndicator = createGateIndicator(startEntry.object);
-    finishIndicator.position.y = startEntry.centerY;
+    finishIndicator.position.copy(startEntry.indicator.position);
+    finishIndicator.quaternion.copy(startEntry.indicator.quaternion);
     finishIndicator.visible = false;
     repeatCourseIndicators.push(finishIndicator);
     entries.push({ ...startEntry, role: `START / FINISH / LAP ${lap + 1}`, indicator: finishIndicator, passed: false });
@@ -10017,6 +10457,7 @@ function restartLocalRace(source = 'keyboard') {
   flight.position.copy(launchPadState.position);
   flight.velocity.set(0, 0, 0);
   flight.acceleration.set(0, 0, 0);
+  resetFlightControllerState();
   flight.orientation.setFromAxisAngle(axisY, launchPadState.heading);
   flight.throttle = 0;
   flight.speed = 0;
@@ -10028,7 +10469,22 @@ function restartLocalRace(source = 'keyboard') {
   updateTrackIndicators();
   updateRaceTimerDisplay(raceTimerStartedAt);
   updateRaceLeaderboard();
-  showToast(source === 'keyboard' ? 'Race restarted.' : 'Race restarted from your transmitter.');
+  showToast(source === 'keyboard' ? 'Race restarted.' : 'Race restarted from your controller.');
+  return true;
+}
+
+function resetDrone(source = 'controller') {
+  if (!flying) return false;
+  flight.position.copy(flightSpawnPosition);
+  flight.velocity.set(0, 0, 0);
+  flight.acceleration.set(0, 0, 0);
+  resetFlightControllerState();
+  flight.orientation.copy(flightSpawnOrientation);
+  flight.throttle = raceTimerEnabled ? 0 : 0.54;
+  flight.speed = 0;
+  previousFlightPosition.copy(flight.position);
+  if (launchPadState) launchPadState.started = false;
+  showToast(source === 'controller' ? 'Drone reset to its starting position.' : 'Drone reset.');
   return true;
 }
 
@@ -10051,6 +10507,57 @@ function playGateTone(correct) {
   } catch { /* Checkpoint sounds are optional if Web Audio is unavailable. */ }
 }
 
+function playUiSound(kind = 'click') {
+  if (!soundEnabled || audioVolume <= 0) return;
+  try {
+    audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === 'suspended') {
+      void audioContext.resume().catch(() => { /* Sound remains optional if audio is unavailable. */ });
+    }
+    const now = audioContext.currentTime;
+    const notes = kind === 'navigate'
+      ? [{ frequency: 620, delay: 0 }, { frequency: 840, delay: 0.055 }]
+      : kind === 'hover'
+        ? [{ frequency: 760, delay: 0 }]
+        : kind === 'enable'
+          ? [{ frequency: 660, delay: 0 }, { frequency: 880, delay: 0.065 }]
+          : [{ frequency: 590, delay: 0 }];
+    const peak = (kind === 'hover' ? 0.012 : kind === 'click' ? 0.035 : 0.045) * audioVolume;
+    for (const note of notes) {
+      const start = now + note.delay;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(note.frequency, start);
+      oscillator.frequency.exponentialRampToValueAtTime(note.frequency * 0.72, start + 0.075);
+      gain.gain.setValueAtTime(peak, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.09);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.095);
+    }
+  } catch { /* Interface sounds are optional if Web Audio is unavailable. */ }
+}
+
+let lastUiHoverSoundAt = 0;
+document.addEventListener('pointerover', (event) => {
+  const target = event.target instanceof Element ? event.target.closest('.menu-choice, .gate-type') : null;
+  if (!target || target.contains(event.relatedTarget)) return;
+  const now = performance.now();
+  if (now - lastUiHoverSoundAt < 70) return;
+  lastUiHoverSoundAt = now;
+  playUiSound('hover');
+}, true);
+
+document.addEventListener('click', (event) => {
+  if (!(event.target instanceof Element)) return;
+  const control = event.target.closest('button, a[href], [role="button"], [role="switch"], input[type="color"]');
+  if (!control || control.matches(':disabled, [aria-disabled="true"]')) return;
+  if (control.id === 'soundToggle' && !soundEnabled) return;
+  const navigating = control.matches('.menu-choice, [data-menu-choice], [data-page], #settingsButton, #builderBack');
+  playUiSound(navigating ? 'navigate' : 'click');
+}, true);
+
 function unlockGateAudio() {
   if (!soundEnabled) return;
   try {
@@ -10068,7 +10575,25 @@ function updateTrackIndicators() {
     if (entry.passed || !isCurrentOrNext) return;
     entry.object.updateWorldMatrix(true, false);
     const localDronePosition = entry.object.worldToLocal(flight.position.clone());
-    const correctApproach = localDronePosition.z >= 0;
+    const planes = entry.object.userData.gatePassPlanes;
+    const directions = entry.object.userData.gateData?.entryDirections;
+    const candidatePlanes = entry.planeIndex === null || entry.planeIndex === undefined
+      ? planes
+      : [planes?.[entry.planeIndex]].filter(Boolean);
+    const plane = candidatePlanes?.reduce((closest, candidate, candidateIndex) => {
+      const planeIndex = entry.planeIndex === null || entry.planeIndex === undefined ? candidateIndex : entry.planeIndex;
+      if (directions?.[planeIndex] === 0) return closest;
+      const distance = Math.abs(localDronePosition.clone().sub(candidate.point).dot(candidate.normal));
+      return !closest || distance < closest.distance ? { plane: candidate, distance } : closest;
+    }, null)?.plane || (candidatePlanes?.length ? null : entry.object.userData.gatePassPlane);
+    if (planes?.length && !plane) return;
+    const approachDistance = plane
+      ? localDronePosition.clone().sub(plane.point).dot(plane.normal)
+      : localDronePosition.z;
+    const entryDirection = entry.object.userData.gateData?.entryDirections?.[planes?.indexOf(plane) ?? 0]
+      ?? entry.object.userData.gateData?.entryDirection
+      ?? 1;
+    const correctApproach = entryDirection === 1 ? approachDistance >= 0 : approachDistance < 0;
     entry.indicator.material.color.setHex(correctApproach ? 0x73ff8a : 0xff4b65);
     entry.indicator.material.opacity = index === routeProgress ? 0.36 : 0.14;
   });
@@ -10080,24 +10605,54 @@ function updateTrackIndicators() {
   entry.object.updateWorldMatrix(true, false);
   const localDronePosition = entry.object.worldToLocal(flight.position.clone());
   const localPreviousPosition = entry.object.worldToLocal(previousFlightPosition.clone());
-  const crossed = (localPreviousPosition.z > 0 && localDronePosition.z <= 0)
-    || (localPreviousPosition.z < 0 && localDronePosition.z >= 0);
-  if (!crossed) return;
-  const amount = localPreviousPosition.z / (localPreviousPosition.z - localDronePosition.z);
-  const crossX = THREE.MathUtils.lerp(localPreviousPosition.x, localDronePosition.x, amount);
-  const crossY = THREE.MathUtils.lerp(localPreviousPosition.y, localDronePosition.y, amount);
-  const gateVerticalOffset = crossY - (entry.centerY || 0);
-  if (crossX * crossX + gateVerticalOffset * gateVerticalOffset > entry.radius * entry.radius) return;
+  const planes = entry.object.userData.gatePassPlanes;
+  const crossingPlanes = entry.planeIndex !== null && entry.planeIndex !== undefined
+    ? [planes?.[entry.planeIndex]].filter(Boolean)
+    : planes?.length
+      ? planes
+    : [entry.object.userData.gatePassPlane || {
+      point: new THREE.Vector3(0, entry.centerY || 0, 0),
+      normal: new THREE.Vector3(0, 0, 1),
+    }];
+  let crossedCorrectly = false;
+  for (const [planeIndex, plane] of crossingPlanes.entries()) {
+    if (!plane) continue;
+    const gateData = entry.object.userData.gateData;
+    const gatePlaneIndex = entry.planeIndex !== null && entry.planeIndex !== undefined ? entry.planeIndex : planeIndex;
+    const entryDirection = gateData?.entryDirections?.[gatePlaneIndex] ?? gateData?.entryDirection;
+    if (entryDirection === 0) continue;
+    const droneDistance = localDronePosition.clone().sub(plane.point).dot(plane.normal);
+    const previousDistance = localPreviousPosition.clone().sub(plane.point).dot(plane.normal);
+    const crossed = (previousDistance > 0 && droneDistance <= 0)
+      || (previousDistance < 0 && droneDistance >= 0);
+    if (!crossed) continue;
+    const amount = previousDistance / (previousDistance - droneDistance);
+    const crossingPoint = localPreviousPosition.clone().lerp(localDronePosition, amount);
+    const crossingOffset = crossingPoint.sub(plane.point);
+    if (plane.width && plane.height) {
+      const horizontalOffset = crossingOffset.dot(plane.widthAxis);
+      const verticalOffset = crossingOffset.dot(plane.heightAxis);
+      const outsideOpening = plane.circle
+        ? horizontalOffset * horizontalOffset + verticalOffset * verticalOffset > (plane.width / 2) ** 2
+        : Math.abs(horizontalOffset) > plane.width / 2 || Math.abs(verticalOffset) > plane.height / 2;
+      if (outsideOpening) continue;
+    } else if (crossingOffset.x * crossingOffset.x + crossingOffset.y * crossingOffset.y > entry.radius * entry.radius) {
+      continue;
+    }
 
-  const repeatedStartFinish = entry.isStartFinish && completedIndex > 0;
-  const correctDirection = repeatedStartFinish
-    ? localPreviousPosition.z < 0 && localDronePosition.z >= 0
-    : localPreviousPosition.z > 0 && localDronePosition.z <= 0;
-  if (!correctDirection) {
-    playGateTone(false);
-    entry.indicator.material.color.setHex(0xff4b65);
-    return;
+    const repeatedStartFinish = entry.isStartFinish && completedIndex > 0 && entryDirection === undefined;
+    const correctDirection = entryDirection === -1 || repeatedStartFinish
+      ? previousDistance < 0 && droneDistance >= 0
+      : previousDistance > 0 && droneDistance <= 0;
+    if (!correctDirection) {
+      playGateTone(false);
+      entry.indicator.material.color.setHex(0xff4b65);
+      return;
+    }
+    crossedCorrectly = true;
+    break;
   }
+  if (!crossedCorrectly) return;
 
   entry.passed = true;
   entry.indicator.visible = false;
@@ -10190,6 +10745,7 @@ async function enterFlight() {
   prepareFlightCourse();
   flight.position.set(0, 5, 20);
   flight.velocity.set(0, 0, 0);
+  resetFlightControllerState();
   flight.orientation.identity();
   const firstCourseGate = flightCourseEntries[0];
   if (launchPadState) {
@@ -10202,6 +10758,8 @@ async function enterFlight() {
     flight.position.copy(gatePosition).addScaledVector(approachNormal, 9);
     flight.orientation.setFromAxisAngle(axisY, Math.atan2(approachNormal.x, approachNormal.z));
   }
+  flightSpawnPosition.copy(flight.position);
+  flightSpawnOrientation.copy(flight.orientation);
   previousFlightPosition.copy(flight.position);
   buildFlightCollisionWorld();
   flight.throttle = raceTimerEnabled ? 0 : 0.54;
@@ -10289,23 +10847,44 @@ document.querySelector('#testTrack').addEventListener('click', () => {
 });
 document.querySelector('#exitFlight').addEventListener('click', exitFlight);
 
-function normalizeBuilderGateSequence(startFinishId = null) {
+function normalizeBuilderGateSequence(startFinishId = null, startFinishOpeningIndex = null) {
   if (!builderGates.length) return;
-  const chosenStartId = startFinishId
-    || builderGates.find((gate) => gate.isStartFinish)?.id
-    || builderGates[0].id;
-  const checkpoints = builderGates.filter((gate) => gate.id !== chosenStartId);
-  checkpoints.sort((a, b) => (Number(a.routeOrder) || Number.MAX_SAFE_INTEGER) - (Number(b.routeOrder) || Number.MAX_SAFE_INTEGER));
-  checkpoints.forEach((gate, index) => {
-    gate.isStartFinish = false;
-    gate.routeOrder = index + 1;
+  const slots = builderGateRouteSlots();
+  const previousStartFinish = slots.find((slot) => slot.isStartFinish);
+  const requestedStartFinish = startFinishId
+    ? slots.find((slot) => slot.gate.id === startFinishId
+      && slot.openingIndex === startFinishOpeningIndex)
+    : null;
+  const startFinish = requestedStartFinish || previousStartFinish || slots[0];
+  const checkpoints = slots.filter((slot) => slot !== startFinish
+    && (slot.routeOrder > 0 || slot === previousStartFinish));
+  checkpoints.sort((a, b) => {
+    const aOrder = a === previousStartFinish ? Number.MAX_SAFE_INTEGER : a.routeOrder;
+    const bOrder = b === previousStartFinish ? Number.MAX_SAFE_INTEGER : b.routeOrder;
+    return aOrder - bOrder;
   });
-  const startFinish = builderGates.find((gate) => gate.id === chosenStartId);
-  if (startFinish) {
-    startFinish.isStartFinish = true;
-    startFinish.routeOrder = 0;
-    builderGates = [startFinish, ...checkpoints];
-  }
+  checkpoints.forEach((slot, index) => {
+    setBuilderGateRouteSlotOrder(slot, index + 1);
+  });
+  slots.filter((slot) => slot !== startFinish && !checkpoints.includes(slot) && slot.routeOrder <= 0)
+    .forEach((slot) => setBuilderGateRouteSlotOrder(slot, 0));
+  slots.forEach((slot) => {
+    if (slot.openingIndex === null) slot.gate.isStartFinish = slot === startFinish;
+    else slot.gate.entryStartFinish[slot.openingIndex] = slot === startFinish;
+  });
+  if (startFinish) setBuilderGateRouteSlotOrder(startFinish, 0);
+  const slotsAfterOrdering = builderGateRouteSlots();
+  const firstOrderByGate = new Map();
+  slotsAfterOrdering.forEach((slot) => {
+    if (slot.routeOrder > 0 && !firstOrderByGate.has(slot.gate.id)) firstOrderByGate.set(slot.gate.id, slot.routeOrder);
+  });
+  builderGates.sort((a, b) => {
+    const aIsStartFinish = startFinish?.gate.id === a.id;
+    const bIsStartFinish = startFinish?.gate.id === b.id;
+    const aOrder = aIsStartFinish ? 0 : firstOrderByGate.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = bIsStartFinish ? 0 : firstOrderByGate.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    return aOrder - bOrder;
+  });
   builderGates.forEach((gate) => {
     const object = customGateObjects.find((item) => item.userData.gateId === gate.id);
     if (object) {
@@ -10316,38 +10895,76 @@ function normalizeBuilderGateSequence(startFinishId = null) {
 }
 
 function orderedBuilderGates() {
-  if (!builderGates.length) return [];
-  const startFinish = builderGates.find((gate) => gate.isStartFinish) || builderGates[0];
-  const checkpoints = builderGates.filter((gate) => gate.id !== startFinish.id)
-    .sort((a, b) => Number(a.routeOrder) - Number(b.routeOrder));
+  const slots = builderGateRouteSlots();
+  if (!slots.length) return [];
+  const startFinish = slots.find((slot) => slot.isStartFinish) || slots[0];
+  const checkpoints = slots.filter((slot) => slot !== startFinish && slot.routeOrder > 0)
+    .sort((a, b) => a.routeOrder - b.routeOrder);
   return [startFinish, ...checkpoints];
+}
+
+function setBuilderGateRouteNumber(selected, requestedNumber, openingIndex = null) {
+  const slots = builderGateRouteSlots();
+  const selectedSlot = slots.find((slot) => slot.gate.id === selected.id && slot.openingIndex === openingIndex)
+    || slots.find((slot) => slot.gate.id === selected.id && slot.openingIndex === null);
+  if (!selectedSlot || selectedSlot.isStartFinish) return;
+  const checkpoints = slots.filter((slot) => slot !== selectedSlot && !slot.isStartFinish && slot.routeOrder > 0)
+    .sort((a, b) => a.routeOrder - b.routeOrder);
+  if (requestedNumber === 0) {
+    setBuilderGateRouteSlotOrder(selectedSlot, 0);
+    checkpoints.forEach((slot, index) => { setBuilderGateRouteSlotOrder(slot, index + 1); });
+  } else {
+    const requested = THREE.MathUtils.clamp(Math.floor(requestedNumber), 1, checkpoints.length + 1);
+    checkpoints.splice(requested - 1, 0, selectedSlot);
+    checkpoints.forEach((slot, index) => { setBuilderGateRouteSlotOrder(slot, index + 1); });
+  }
+  normalizeBuilderGateSequence();
+  invalidateBuilderTrackPicture();
+  updateBuilderDisplay();
 }
 
 function updateBuilderDisplay() {
   const relayMode = builderGameMode === 'relay-race';
   const podiumCount = relayMode ? builderRelayPodiumGateCount() : builderPodiumCount();
-  const hasStartFinish = builderGates.some((gate) => gate.isStartFinish);
-  document.querySelector('#gateCount').textContent = `${String(builderGates.length).padStart(2, '0')} GATES / ${String(builderProps.length).padStart(2, '0')} OBJECTS`;
+  const routeSlots = builderGateRouteSlots();
+  const hasStartFinish = routeSlots.some((slot) => slot.isStartFinish);
+  const countedGateCount = routeSlots.filter((slot) => slot.isStartFinish || slot.routeOrder > 0).length;
+  document.querySelector('#gateCount').textContent = `${String(countedGateCount).padStart(2, '0')} GATES / ${String(builderProps.length).padStart(2, '0')} OBJECTS`;
   const podiumRequirement = builderGameMode === 'relay-race' ? RELAY_STATION_COUNT : REQUIRED_TRACK_PODIUM_COUNT;
-  document.querySelector('#builderSummary').textContent = `${builderGates.length} GATES / ${builderProps.length} OBJECTS / ${podiumCount}/${podiumRequirement} ${relayMode ? 'RELAY PODIUM GATES' : 'PODIUMS'} / ${hasStartFinish ? 'START + FINISH SET' : 'MARK START + FINISH'}`;
+  document.querySelector('#builderSummary').textContent = `${podiumCount}/${podiumRequirement} ${relayMode ? 'RELAY PODIUMS' : 'PODIUMS'} / ${hasStartFinish ? 'START SET' : 'START NEEDED'}`;
   const podiumAssetDescription = document.querySelector('[data-builder-prop="podium"] small');
-  if (podiumAssetDescription) podiumAssetDescription.textContent = 'Red launch stand · 8 required';
+  if (podiumAssetDescription) podiumAssetDescription.textContent = `${REQUIRED_TRACK_PODIUM_COUNT} required`;
   const relayPodiumGateDescription = document.querySelector('[data-builder-prop="relay-podium-gate"] small');
-  if (relayPodiumGateDescription) relayPodiumGateDescription.textContent = `Combined station · exactly ${RELAY_STATION_COUNT} required (${builderRelayPodiumGateCount()}/${RELAY_STATION_COUNT})`;
+  if (relayPodiumGateDescription) relayPodiumGateDescription.textContent = `${RELAY_STATION_COUNT} required · ${builderRelayPodiumGateCount()}/${RELAY_STATION_COUNT}`;
   const relayPodiumGateButton = document.querySelector('[data-builder-prop="relay-podium-gate"]');
   if (relayPodiumGateButton) relayPodiumGateButton.disabled = !relayMode || builderRelayPodiumGateCount() >= RELAY_STATION_COUNT;
-  const publishHint = document.querySelector('.builder-publish-message');
-  if (publishHint) publishHint.textContent = builderGameMode === 'relay-race'
-    ? 'Relay tracks need one start / finish gate, exactly 3 numbered gates, and exactly 4 Relay podium gates paired one-to-one within 8 m of the route gates. Do not add separate podiums. Set 1–5 laps. Team pilots are randomly assigned to stations when the race starts.'
-    : 'Place 8 red podiums for the race grid. Mark the start / finish gate and add at least one numbered gate; the clock starts when a pilot lifts off.';
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
   const inspector = document.querySelector('#gateInspector');
   inspector.hidden = !selected;
+  const routeNumberControl = document.querySelector('#gateRouteNumberControl');
+  const routeNumberLabel = document.querySelector('#gateRouteNumberLabel');
   const routeNumberInput = document.querySelector('#gateRouteNumber');
   const startFinishInput = document.querySelector('#gateStartFinish');
-  routeNumberInput.disabled = !selected || selected.isStartFinish;
-  startFinishInput.disabled = !selected;
-  startFinishInput.checked = Boolean(selected?.isStartFinish);
+  const startFinishControl = startFinishInput.closest('.builder-role-toggle');
+  routeNumberControl.hidden = !selected || selectedGateOpeningIndex === null;
+  const selectedRouteSlot = routeSlots.find((slot) => slot.gate.id === selected?.id
+    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+  const selectedRouteOrder = selectedRouteSlot?.routeOrder ?? Number(selected?.routeOrder) ?? 0;
+  const selectedIsStartFinish = Boolean(selectedRouteSlot?.isStartFinish ?? selected?.isStartFinish);
+  const numberedGateCount = routeSlots.filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length;
+  routeNumberInput.max = String(Math.max(1, numberedGateCount + (selected && selectedRouteOrder === 0 && !selectedIsStartFinish ? 1 : 0)));
+  const selectedDirection = selected?.entryDirections?.[selectedGateOpeningIndex ?? 0] ?? selected?.entryDirection ?? 1;
+  routeNumberInput.disabled = !selected || selectedIsStartFinish || !selectedRouteSlot || selectedDirection === 0;
+  routeNumberLabel.textContent = selected?.type === 'neon-dive' && selectedGateOpeningIndex !== null
+    ? `ENTRANCE ${selectedGateOpeningIndex + 1} ROUTE NUMBER (0 = N/A)`
+    : 'ROUTE NUMBER (0 = N/A)';
+  startFinishControl.hidden = !selected || selectedGateOpeningIndex === null;
+  startFinishInput.disabled = !selectedRouteSlot;
+  startFinishInput.checked = selectedIsStartFinish;
+  const startFinishText = startFinishControl.querySelector('b');
+  startFinishText.textContent = selected?.type === 'neon-dive' && selectedGateOpeningIndex !== null
+    ? `ENTRANCE ${selectedGateOpeningIndex + 1} / START + FINISH`
+    : 'START / FINISH';
   const selectedProp = builderProps.find((prop) => prop.id === selectedBuilderPropId);
   const selectedEnvironmentBuilding = builderEnvironmentBuildings.find((item) => item.id === selectedEnvironmentBuildingId);
   document.querySelector('#propInspector').hidden = !selectedProp && !selectedEnvironmentBuilding;
@@ -10360,10 +10977,15 @@ function updateBuilderDisplay() {
     document.querySelector('#selectedPropName').textContent = selectedEnvironmentBuilding.label;
   }
   if (selected) {
-    document.querySelector('#selectedGateName').textContent = selected.isStartFinish
-      ? `${gateTypes[selected.type].name} / Start + Finish`
-      : `${gateTypes[selected.type].name} / Gate ${selected.routeOrder}`;
-    routeNumberInput.value = String(selected.routeOrder || 1);
+    const selectedGatePrefix = selected.type === 'neon-dive' && selectedGateOpeningIndex !== null
+      ? `${gateTypes[selected.type].name} / Entrance ${selectedGateOpeningIndex + 1}`
+      : gateTypes[selected.type].name;
+    document.querySelector('#selectedGateName').textContent = selectedIsStartFinish
+      ? `${selectedGatePrefix} / Start + Finish`
+      : selectedRouteOrder === 0
+        ? `${selectedGatePrefix} / N/A`
+        : `${selectedGatePrefix} / Gate ${selectedRouteOrder}`;
+    routeNumberInput.value = selectedIsStartFinish ? '' : String(selectedRouteOrder);
     document.querySelector('#gateColor').value = selected.color;
   }
   updateBuilderPublishState();
@@ -10395,9 +11017,9 @@ function updateBuilderCameraMovement(deltaSeconds) {
   orbit.target.add(builderMoveDelta);
 }
 
-function setBuilderCamera() {
+function setBuilderCamera(distanceMultiplier = 1) {
   builderMoveKeys.clear();
-  camera.position.set(30, 24, menuPlatformCenterZ + 34);
+  camera.position.set(30 * distanceMultiplier, 1.2 + (24 - 1.2) * distanceMultiplier, menuPlatformCenterZ + 34 * distanceMultiplier);
   orbit.target.set(0, 1.2, menuPlatformCenterZ);
   orbit.update();
 }
@@ -10460,7 +11082,7 @@ window.addEventListener('keydown', (event) => {
   if (currentPage !== 'builder' || !(selectedBuilderPropId || selectedGateId || selectedEnvironmentBuildingId) || flying) return;
   const typing = event.target instanceof Element && event.target.closest('input, select, textarea, [contenteditable="true"]');
   if (typing || event.altKey || event.ctrlKey || event.metaKey) return;
-  const mode = { KeyG: 'translate' }[event.code];
+  const mode = { KeyG: 'translate', KeyR: 'rotate' }[event.code];
   if (mode) {
     builderTransformMode = mode;
     builderTransformControls.setMode(mode);
@@ -10476,6 +11098,7 @@ window.addEventListener('keydown', (event) => {
 function selectBuilderGate(id) {
   detachBuilderPropTransform();
   selectedGateId = id;
+  selectedGateOpeningIndex = null;
   selectedBuilderPropId = null;
   selectedEnvironmentBuildingId = null;
   const data = builderGates.find((gate) => gate.id === id);
@@ -10575,6 +11198,7 @@ function clearBuilderGhost() {
 
 function makeTransparentBuilderVisual(model) {
   const sharedMaterialSet = new Set(Object.values(sharedMaterials));
+  const isGateVisual = model.userData.importedGate || model.userData.proceduralGate;
   model.traverse((node) => {
     if (!node.isMesh) return;
     const cloneIfShared = (material) => sharedMaterialSet.has(material) ? material.clone() : material;
@@ -10584,8 +11208,10 @@ function makeTransparentBuilderVisual(model) {
       material.transparent = true;
       material.opacity = 0.32;
       material.depthWrite = false;
-      if (material.emissive) material.emissive.set(0x54dfff);
-      material.emissiveIntensity = Math.max(0.7, Number(material.emissiveIntensity) || 0);
+      if (!isGateVisual) {
+        if (material.emissive) material.emissive.set(0x54dfff);
+        material.emissiveIntensity = Math.max(0.7, Number(material.emissiveIntensity) || 0);
+      }
       material.needsUpdate = true;
     });
     node.renderOrder = 5;
@@ -10600,14 +11226,18 @@ function setBuilderGhost(asset) {
   if (!asset) return;
   const assetKey = `${asset.kind}:${asset.type}`;
   builderGhostAssetKey = assetKey;
-  const initialModel = asset.kind === 'gate' ? createProceduralGate(asset.type) : createBuilderPropModel(asset.type);
+  const palette = biomes[activeBiome]?.colors ?? ['cyan'];
+  const gateHue = palette[builderGates.length % palette.length] || 'cyan';
+  const initialModel = asset.kind === 'gate' ? createProceduralGate(asset.type, gateHue) : createBuilderPropModel(asset.type);
   builderGhostRoot.add(makeTransparentBuilderVisual(initialModel));
   if (asset.kind === 'gate') {
     loadGateModel(asset.type).then((source) => {
       if (!source || builderGhostAssetKey !== assetKey || currentPage !== 'builder') return;
       const old = builderGhostRoot.children[0];
       if (old) { builderGhostRoot.remove(old); disposeBuilderVisual(old); }
-      builderGhostRoot.add(makeTransparentBuilderVisual(cloneGateModel(source)));
+      const model = cloneGateModel(source);
+      applyGateLedColor(model, gateHue);
+      builderGhostRoot.add(makeTransparentBuilderVisual(model));
     });
   }
   builderGhostRoot.visible = currentPage === 'builder' && !flying && gatePlacementArmed;
@@ -10642,7 +11272,7 @@ function placeBuilderGate(position) {
     scaleZ: 1,
     color: palette[builderGates.length % palette.length] || 'cyan',
     isStartFinish: builderGates.length === 0,
-    routeOrder: builderGates.length === 0 ? 0 : builderGates.filter((gate) => !gate.isStartFinish).length + 1,
+    routeOrder: builderGates.length === 0 ? 0 : builderGateRouteSlots().filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length + 1,
   };
   builderGates.push(data);
   customGateObjects.push(createBuilderGate(data));
@@ -10763,7 +11393,8 @@ function pasteBuilderObject() {
       y: Math.round(builderSurfaceYAt(position.x, position.z) * 4) / 4,
       z: position.z,
       isStartFinish: false,
-      routeOrder: builderGates.filter((gate) => !gate.isStartFinish).length + 1,
+      routeOrder: builderGateRouteSlots().filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length + 1,
+      entryRouteOrders: undefined,
     };
     builderGates.push(data);
     customGateObjects.push(createBuilderGate(data));
@@ -10804,6 +11435,11 @@ const builderPointer = new THREE.Vector2();
 const builderGround = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const builderDragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const builderGroundHit = new THREE.Vector3();
+const builderGateHitBounds = new THREE.Box3();
+const builderGateHitCenter = new THREE.Vector3();
+const builderGateHitRadius = new THREE.Vector3();
+const builderGateHitSphere = new THREE.Sphere();
+const builderGateHit = new THREE.Vector3();
 let builderPointerDown = null;
 function setBuilderRayFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -10815,10 +11451,63 @@ function setBuilderRayFromEvent(event) {
 
 function builderGateAtPointer(event) {
   if (!setBuilderRayFromEvent(event)) return null;
-  const hitGate = builderRaycaster.intersectObjects(customGateObjects, true)[0]?.object;
-  let selectedObject = hitGate;
-  while (selectedObject && !selectedObject.userData.isBuilderGate) selectedObject = selectedObject.parent;
-  return selectedObject?.userData.gateId ? selectedObject : null;
+  const gateHits = builderRaycaster.intersectObjects(customGateObjects, true);
+  let closestGate = null;
+  let closestDistance = Infinity;
+  for (const gate of customGateObjects) {
+    if (!gate.visible || !gate.userData.gateId) continue;
+    gate.updateWorldMatrix(true, true);
+    builderGateHitBounds.setFromObject(gate);
+    if (builderGateHitBounds.isEmpty()) continue;
+    builderGateHitBounds.getCenter(builderGateHitCenter);
+    builderGateHitBounds.getBoundingSphere(builderGateHitSphere);
+    builderGateHitRadius.set(
+      Math.max(builderGateHitSphere.radius * 0.18, 0.55),
+      Math.max(builderGateHitSphere.radius * 0.18, 0.55),
+      Math.max(builderGateHitSphere.radius * 0.18, 0.55),
+    );
+    builderGateHitBounds.expandByVector(builderGateHitRadius);
+    if (!builderRaycaster.ray.intersectBox(builderGateHitBounds, builderGateHit)) continue;
+    const distance = builderRaycaster.ray.origin.distanceTo(builderGateHit);
+    if (distance >= closestDistance) continue;
+    closestGate = gate;
+    closestDistance = distance;
+  }
+
+  const actualHit = gateHits[0];
+  if (actualHit) {
+    let hitGate = actualHit.object;
+    while (hitGate && !hitGate.userData.isBuilderGate) hitGate = hitGate.parent;
+    if (hitGate?.userData.gateId) {
+      const actualDistance = actualHit.distance;
+      if (!closestGate || actualDistance <= closestDistance) return hitGate;
+    }
+  }
+  return closestGate;
+}
+
+function builderGateBoundaryAtPointer(event) {
+  if (!setBuilderRayFromEvent(event)) return null;
+  const hit = builderRaycaster.intersectObjects(customGateObjects, true)
+    .find((intersection) => intersection.object.userData.isGatePassBoundarySurface);
+  if (!hit) return null;
+  let gate = hit.object.parent;
+  while (gate && !gate.userData.isBuilderGate) gate = gate.parent;
+  return gate?.userData.gateData
+    ? { gate, openingIndex: hit.object.userData.gateBoundaryIndex }
+    : null;
+}
+
+function builderGateBadgeAtPointer(event) {
+  if (!setBuilderRayFromEvent(event)) return null;
+  const hit = builderRaycaster.intersectObjects(customGateObjects, true)
+    .find((intersection) => intersection.object.userData.isBuilderGateBadge);
+  if (!hit) return null;
+  let gate = hit.object.parent;
+  while (gate && !gate.userData.isBuilderGate) gate = gate.parent;
+  return gate?.userData.gateData
+    ? { gate, openingIndex: hit.object.userData.gateBadgeOpeningIndex }
+    : null;
 }
 
 function builderPropAtPointer(event) {
@@ -10882,6 +11571,87 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (currentPage !== 'builder' || event.button !== 0) return;
   if (builderTransformControls.dragging) return;
+  const badgeGate = builderGateBadgeAtPointer(event);
+  if (badgeGate) {
+    const data = badgeGate.gate.userData.gateData;
+    const openingIndex = badgeGate.openingIndex;
+    const isDive = data.type === 'neon-dive';
+    const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id && item.openingIndex === (isDive ? openingIndex : null));
+    if (slot && !slot.isStartFinish) {
+      const numberedCount = builderGateRouteSlots().filter((item) => !item.isStartFinish && item.routeOrder > 0).length;
+      const nextNumber = slot.routeOrder > 0 && slot.routeOrder < numberedCount
+        ? slot.routeOrder + 1
+        : slot.routeOrder > 0 ? 0 : 1;
+      setBuilderGateRouteNumber(data, nextNumber, slot.openingIndex);
+      showToast(nextNumber === 0 ? 'Gate set to N/A and removed from the race route.' : `Gate number set to ${nextNumber}.`);
+    }
+    selectBuilderGate(data.id);
+    selectedGateOpeningIndex = openingIndex ?? 0;
+    updateBuilderDisplay();
+    builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+    orbit.enabled = false;
+    renderer.domElement.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    return;
+  }
+  const boundaryHit = builderGateBoundaryAtPointer(event);
+  if (boundaryHit) {
+    const { gate, openingIndex } = boundaryHit;
+    const data = gate.userData.gateData;
+    selectBuilderGate(data.id);
+    selectedGateOpeningIndex = openingIndex ?? 0;
+    if (data.type === 'neon-dive') {
+      const previousDirection = data.entryDirections[openingIndex] ?? 1;
+      const nextDirection = previousDirection === 1 ? -1 : previousDirection === -1 ? 0 : 1;
+      data.entryDirections[openingIndex] = nextDirection;
+      data.entryDirection = data.entryDirections[0];
+      updateGatePassBoundaryDirection(gate);
+      const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id && item.openingIndex === openingIndex);
+      if (slot && !slot.isStartFinish && nextDirection === 0) {
+        setBuilderGateRouteNumber(data, 0, openingIndex);
+      } else if (slot && !slot.isStartFinish && previousDirection === 0 && nextDirection !== 0 && slot.routeOrder === 0) {
+        setBuilderGateRouteNumber(data, builderGateRouteSlots().filter((item) => item.routeOrder > 0 && !item.isStartFinish).length + 1, openingIndex);
+      } else {
+        updateBuilderDisplay();
+        invalidateBuilderTrackPicture();
+      }
+      document.querySelector('#gateRouteNumber').focus({ preventScroll: true });
+      const directionMessage = nextDirection === 0
+        ? 'invisible'
+        : nextDirection === 1 ? 'green from the front' : 'green from the back';
+      showToast(`Gate ${openingIndex + 1} direction: ${directionMessage}${nextDirection === 0 ? '. Gate set to N/A.' : '.'}`);
+      builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+      orbit.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    const previousDirection = data.entryDirections[openingIndex] ?? 1;
+    const nextDirection = previousDirection === 1 ? -1 : previousDirection === -1 ? 0 : 1;
+    data.entryDirections[openingIndex] = nextDirection;
+    data.entryDirection = data.entryDirections[0];
+    updateGatePassBoundaryDirection(gate);
+    const allOpeningsHidden = data.entryDirections.every((direction) => direction === 0);
+    const directionMessage = nextDirection === 0
+      ? 'invisible'
+      : nextDirection === 1 ? 'green from the front' : 'green from the back';
+    const routeSlot = builderGateRouteSlots().find((slot) => slot.gate.id === data.id && slot.openingIndex === null);
+    if (!routeSlot?.isStartFinish && allOpeningsHidden && Number(data.routeOrder) > 0) {
+      setBuilderGateRouteNumber(data, 0);
+    } else if (!routeSlot?.isStartFinish && previousDirection === 0 && nextDirection !== 0 && Number(data.routeOrder) === 0) {
+      setBuilderGateRouteNumber(data, 1);
+    } else {
+      updateBuilderDisplay();
+      invalidateBuilderTrackPicture();
+    }
+    document.querySelector('#gateRouteNumber').focus({ preventScroll: true });
+    showToast(`Gate ${openingIndex + 1} direction: ${directionMessage}${allOpeningsHidden && !routeSlot?.isStartFinish ? '. Gate set to N/A.' : '.'}`);
+    builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+    orbit.enabled = false;
+    renderer.domElement.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    return;
+  }
   const gateObject = builderGateAtPointer(event);
   const environmentBuilding = gateObject ? null : builderEnvironmentBuildingAtPointer(event);
   const propObject = gateObject || environmentBuilding ? null : builderPropAtPointer(event);
@@ -10908,6 +11678,17 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     orbit.enabled = false;
     event.preventDefault();
     return;
+  }
+  if (!gatePlacementArmed && (selectedGateId || selectedBuilderPropId || selectedEnvironmentBuildingId)) {
+    detachBuilderPropTransform();
+    selectedGateId = null;
+    selectedBuilderPropId = null;
+    selectedEnvironmentBuildingId = null;
+    builderSelectionHelper.visible = false;
+    document.querySelectorAll('[data-gate-type], [data-builder-prop]').forEach((button) => button.classList.remove('is-selected'));
+    document.querySelector('#builderPlacementStatus').textContent = 'SELECT OR CHOOSE AN OBJECT';
+    updateBuilderDisplay();
+    orbit.enabled = true;
   }
   const objectId = gateObject?.userData.gateId || null;
   builderPointerDown = { x: event.clientX, y: event.clientY, kind: gateObject ? 'gate' : null, objectId, moved: false };
@@ -11028,26 +11809,27 @@ function updateSelectedGateFromInspector() {
 
 function updateSelectedGateRouteNumber() {
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
-  if (!selected || selected.isStartFinish) return;
-  const checkpoints = builderGates.filter((gate) => !gate.isStartFinish && gate.id !== selected.id)
-    .sort((a, b) => Number(a.routeOrder) - Number(b.routeOrder));
-  const requested = THREE.MathUtils.clamp(Math.floor(Number(document.querySelector('#gateRouteNumber').value) || 1), 1, checkpoints.length + 1);
-  checkpoints.splice(requested - 1, 0, selected);
-  checkpoints.forEach((gate, index) => { gate.routeOrder = index + 1; });
-  normalizeBuilderGateSequence();
-  invalidateBuilderTrackPicture();
-  updateBuilderDisplay();
+  const selectedSlot = builderGateRouteSlots().find((slot) => slot.gate.id === selected?.id
+    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+  if (!selected || selectedSlot?.isStartFinish) return;
+  const value = Number(document.querySelector('#gateRouteNumber').value);
+  if (!Number.isSafeInteger(value) || value < 0) return;
+  setBuilderGateRouteNumber(selected, value, selected.type === 'neon-dive' ? selectedGateOpeningIndex : null);
 }
 
 function updateSelectedGateStartFinish() {
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
-  if (!selected) return;
-  if (!document.querySelector('#gateStartFinish').checked && selected.isStartFinish) {
+  const selectedSlot = builderGateRouteSlots().find((slot) => slot.gate.id === selected?.id
+    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+  if (!selected || !selectedSlot) return;
+  if (!document.querySelector('#gateStartFinish').checked && selectedSlot.isStartFinish) {
     document.querySelector('#gateStartFinish').checked = true;
     showToast('Every track needs one start / finish gate. Mark another gate to move it.');
     return;
   }
-  if (document.querySelector('#gateStartFinish').checked) normalizeBuilderGateSequence(selected.id);
+  if (document.querySelector('#gateStartFinish').checked) {
+    normalizeBuilderGateSequence(selected.id, selectedSlot.openingIndex);
+  }
   invalidateBuilderTrackPicture();
   updateBuilderDisplay();
 }
@@ -11385,8 +12167,8 @@ document.querySelector('#captureTrackPicture').addEventListener('click', () => {
   if (!courseReady) missingUploadDetails.push(builderTrackRequirementsMessage());
   if (!nameReady) missingUploadDetails.push('Add a track name between 2 and 32 characters.');
   const message = missingUploadDetails.length
-    ? `Picture captured. ${missingUploadDetails.join(' ')}`
-    : 'Picture captured. Save the track to keep it on this device, or upload it to the community.';
+    ? `Picture ready. ${missingUploadDetails.join(' ')}`
+    : 'Picture ready. Save locally or upload.';
   setBuilderPublishMessage(message);
   updateBuilderPublishState();
 });
@@ -11413,14 +12195,17 @@ document.querySelector('#publishCommunityTrack').addEventListener('click', async
         gameMode: builderGameMode,
         laps: Number(document.querySelector('#builderLapCount').value) || 1,
         startFinishIndex: 0,
-        points: uploadGates.map((gate) => [gate.x, gate.y + builderGateFlightCenterY, gate.z]),
-        gateRotations: uploadGates.map((gate) => gate.rotation || 0),
-        gateRotationsX: uploadGates.map((gate) => gate.rotationX || 0),
-        gateRotationsZ: uploadGates.map((gate) => gate.rotationZ || 0),
-        gateScales: uploadGates.map((gate) => gate.scale || 1),
-        gateScalesX: uploadGates.map((gate) => gate.scaleX || gate.scale || 1),
-        gateScalesY: uploadGates.map((gate) => gate.scaleY || gate.scale || 1),
-        gateScalesZ: uploadGates.map((gate) => gate.scaleZ || gate.scale || 1),
+        points: uploadGates.map((slot) => [slot.x, slot.y + builderGateFlightCenterY, slot.z]),
+        gateRotations: uploadGates.map((slot) => slot.rotation || 0),
+        gateEntryDirections: uploadGates.map((slot) => slot.openingIndex !== null
+          ? [slot.entryDirections?.[slot.openingIndex] ?? 1]
+          : Array.isArray(slot.entryDirections) ? [...slot.entryDirections] : [slot.entryDirection === -1 ? -1 : 1]),
+        gateRotationsX: uploadGates.map((slot) => slot.rotationX || 0),
+        gateRotationsZ: uploadGates.map((slot) => slot.rotationZ || 0),
+        gateScales: uploadGates.map((slot) => slot.scale || 1),
+        gateScalesX: uploadGates.map((slot) => slot.scaleX || slot.scale || 1),
+        gateScalesY: uploadGates.map((slot) => slot.scaleY || slot.scale || 1),
+        gateScalesZ: uploadGates.map((slot) => slot.scaleZ || slot.scale || 1),
         objects: builderProps.map(({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium }) => ({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium })),
         imageDataUrl: builderTrackPicture,
       }),
@@ -11499,8 +12284,8 @@ function restoreBuilder(savedTrack = null) {
         ladder: 'neon-ladder',
         flag: 'neon-flag',
         hurdle: 'neon-hurdle',
+        dive: 'neon-dive',
         corkscrew: 'neon-square',
-        dive: 'neon-ladder',
       })[gate.type] || (gateTypes[gate.type] ? gate.type : 'neon-square'),
       x,
       y: Number.isFinite(savedY) && savedY !== 0 ? savedY : terrainSurfaceYAt(activeBiome, x, z),
@@ -11513,6 +12298,16 @@ function restoreBuilder(savedTrack = null) {
       scaleY: Number(gate.scaleY) || Number(gate.scale) || 1,
       scaleZ: Number(gate.scaleZ) || Number(gate.scale) || 1,
       color: colors[gate.color] ? gate.color : 'cyan',
+      entryDirection: gate.entryDirection === 0 ? 0 : gate.entryDirection === -1 ? -1 : 1,
+      entryDirections: Array.isArray(gate.entryDirections)
+        ? gate.entryDirections.map((direction) => direction === 0 ? 0 : direction === -1 ? -1 : 1)
+        : null,
+      entryRouteOrders: Array.isArray(gate.entryRouteOrders)
+        ? gate.entryRouteOrders.map((routeOrder) => Number.isSafeInteger(routeOrder) && routeOrder > 0 ? routeOrder : 0)
+        : null,
+      entryStartFinish: Array.isArray(gate.entryStartFinish)
+        ? gate.entryStartFinish.map((isStartFinish) => isStartFinish === true)
+        : null,
       isStartFinish: gate.isStartFinish === true,
       routeOrder: Number.isSafeInteger(gate.routeOrder) ? gate.routeOrder : index,
     };
@@ -11706,9 +12501,10 @@ soundToggle.addEventListener('click', async (event) => {
     }
     soundEnabled = nextValue;
     setSwitch(event.currentTarget, soundEnabled);
+    if (soundEnabled) playUiSound('enable');
     updateMotorAudio({ pitch: 0, roll: 0 });
     saveSettings();
-    showToast(soundEnabled ? 'Flight audio enabled.' : 'Flight audio muted.');
+    showToast(soundEnabled ? 'Flight and menu audio enabled.' : 'Audio muted.');
   } catch {
     setSwitch(event.currentTarget, soundEnabled);
     showToast('Audio is unavailable in this browser.');
@@ -11762,6 +12558,9 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   quality = 1.8;
   hudEnabled = true;
   vignetteEnabled = true;
+  Object.assign(flightTune, flightTuneDefaults);
+  syncFlightTuneControls();
+  renderRatePreview();
   setSwitch(document.querySelector('#hudToggle'), true);
   setSwitch(document.querySelector('#vignetteToggle'), true);
   hud.classList.remove('is-hidden', 'no-vignette');
@@ -11770,7 +12569,7 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   if (qualityChanged) restartForRenderQuality();
   else {
     saveSettings();
-    showToast('Flight settings reset to defaults.');
+    showToast('Settings reset to defaults.');
   }
 });
 
@@ -11897,7 +12696,7 @@ function updateMotorAudio(controls) {
 
 renderer.domElement.addEventListener('dblclick', () => {
   if (flying) return;
-  if (currentPage === 'builder') setBuilderCamera();
+  if (currentPage === 'builder') setBuilderCamera(1.5);
   else if (currentPage === 'trackPicker') setTrackOverviewCamera();
   else resetMenuCamera();
 });
@@ -11919,7 +12718,7 @@ window.addEventListener('keydown', (event) => {
       setPage(pageBeforeSettings);
     } else {
       pageBeforeSettings = currentPage;
-      setSettingsTab('camera');
+      setSettingsTab('tune');
       setPage('settings');
     }
     return;
@@ -12009,6 +12808,7 @@ function startRaceClockOnTakeoff(previous, current) {
 
 function updateFlight(dt) {
   previousFlightPosition.copy(flight.position);
+  previousFlightOrientation.copy(flight.orientation);
   const partyRaceAt = Number(partyLobby?.raceAt) || (Number(partyLobby?.startAt) + 5000);
   if (partyRacePhase === 'grid' && partyLobby?.startAt) {
     if (Date.now() >= partyRaceAt) beginPartyRace(partyRaceAt);
@@ -12051,14 +12851,96 @@ function updateFlight(dt) {
     flight.throttle += (controls.throttle - flight.throttle) * Math.min(1, dt * 12);
   }
 
-  flight.pitchStep.setFromAxisAngle(axisX, -THREE.MathUtils.degToRad(rateToDegrees('pitch', controls.pitch)) * dt);
-  flight.yawStep.setFromAxisAngle(axisY, -THREE.MathUtils.degToRad(rateToDegrees('yaw', controls.yaw)) * dt);
-  flight.rollStep.setFromAxisAngle(axisZ, THREE.MathUtils.degToRad(rateToDegrees('roll', controls.roll)) * dt);
-  flight.orientation.multiply(flight.yawStep).multiply(flight.pitchStep).multiply(flight.rollStep).normalize();
+  flight.angularRateTarget.set(
+    -rateToDegrees('pitch', controls.pitch),
+    -rateToDegrees('yaw', controls.yaw),
+    rateToDegrees('roll', controls.roll),
+  );
+  flight.measuredAngularAcceleration.subVectors(flight.bodyAngularVelocity, flight.previousBodyAngularVelocity)
+    .multiplyScalar(1 / Math.max(dt, 0.001));
+  flight.previousBodyAngularVelocity.copy(flight.bodyAngularVelocity);
+  flight.filteredAngularAcceleration.lerp(
+    flight.measuredAngularAcceleration,
+    1 - Math.exp(-dt / 0.035),
+  );
+  flight.angularRateError.subVectors(flight.angularRateTarget, flight.bodyAngularVelocity);
+  flight.angularRateIntegral.addScaledVector(flight.angularRateError, dt);
+  flight.angularRateIntegral.set(
+    THREE.MathUtils.clamp(flight.angularRateIntegral.x, -300, 300),
+    THREE.MathUtils.clamp(flight.angularRateIntegral.y, -300, 300),
+    THREE.MathUtils.clamp(flight.angularRateIntegral.z, -300, 300),
+  );
+  flight.pidAngularAcceleration.set(
+    flightTune.pitchP * flight.angularRateError.x
+      + flightTune.pitchI * flight.angularRateIntegral.x
+      - flightTune.pitchD * flight.filteredAngularAcceleration.x,
+    flightTune.yawP * flight.angularRateError.y
+      + flightTune.yawI * flight.angularRateIntegral.y
+      - flightTune.yawD * flight.filteredAngularAcceleration.y,
+    flightTune.rollP * flight.angularRateError.z
+      + flightTune.rollI * flight.angularRateIntegral.z
+      - flightTune.rollD * flight.filteredAngularAcceleration.z,
+  );
+  const vehicleMassKg = flightTune.weight / 1000;
+  const wheelbaseMeters = flightTune.wheelbase / 1000;
+  const propThrustScale = (flightTune.propDiameter / 5) ** 2;
+  const motorMaxThrustNewtons = flightTune.motorThrust / 1000 * 9.81 * propThrustScale;
+  const hoverThrottle = flightTune.weight / (4 * flightTune.motorThrust * propThrustScale);
+  const rollPitchInertia = vehicleMassKg * wheelbaseMeters ** 2 / 12;
+  const maxAngularAcceleration = THREE.MathUtils.clamp(
+    (motorMaxThrustNewtons * wheelbaseMeters * 0.5 * THREE.MathUtils.clamp(1 - hoverThrottle, 0, 0.85))
+      / rollPitchInertia * THREE.MathUtils.radToDeg(1),
+    0,
+    9000,
+  );
+  flight.pidAngularAcceleration.set(
+    THREE.MathUtils.clamp(flight.pidAngularAcceleration.x, -maxAngularAcceleration, maxAngularAcceleration),
+    THREE.MathUtils.clamp(flight.pidAngularAcceleration.y, -maxAngularAcceleration * 0.72, maxAngularAcceleration * 0.72),
+    THREE.MathUtils.clamp(flight.pidAngularAcceleration.z, -maxAngularAcceleration, maxAngularAcceleration),
+  );
+  const motorResponseAlpha = 1 - Math.exp(-dt / (flightTune.motorResponse / 1000));
+  flight.motorAngularAcceleration.lerp(flight.pidAngularAcceleration, motorResponseAlpha);
+  flight.bodyAngularVelocity.addScaledVector(flight.motorAngularAcceleration, dt);
+  flight.bodyAngularVelocity.set(
+    THREE.MathUtils.clamp(flight.bodyAngularVelocity.x, -2200, 2200),
+    THREE.MathUtils.clamp(flight.bodyAngularVelocity.y, -1500, 1500),
+    THREE.MathUtils.clamp(flight.bodyAngularVelocity.z, -2200, 2200),
+  );
+  const bodyAngularSpeed = flight.bodyAngularVelocity.length();
+  if (bodyAngularSpeed > 0.001) {
+    flight.angularAxis.copy(flight.bodyAngularVelocity).divideScalar(bodyAngularSpeed);
+    flight.angularStep.setFromAxisAngle(flight.angularAxis, THREE.MathUtils.degToRad(bodyAngularSpeed * dt));
+    flight.orientation.multiply(flight.angularStep).normalize();
+  }
+  const impactAngularSpeed = flight.impactAngularVelocity.length();
+  if (impactAngularSpeed > 0.001) {
+    flight.impactAngularAxis.copy(flight.impactAngularVelocity).divideScalar(impactAngularSpeed);
+    flight.impactAngularStep.setFromAxisAngle(flight.impactAngularAxis, impactAngularSpeed * dt);
+    flight.orientation.premultiply(flight.impactAngularStep).normalize();
+    flight.impactAngularVelocity.multiplyScalar(Math.exp(-2.8 * dt));
+  }
   flight.up.set(0, 1, 0).applyQuaternion(flight.orientation);
-  flight.acceleration.copy(flight.up).multiplyScalar(maxThrust * flight.throttle * flight.throttle);
+  flight.propwashPhase += dt;
+  const descentSpeed = Math.max(0, -flight.velocity.dot(flight.up));
+  const propwashIntensity = THREE.MathUtils.clamp((flight.throttle - 0.52) / 0.42, 0, 1)
+    * THREE.MathUtils.clamp((descentSpeed - 1.6) / 5.5, 0, 1);
+  if (propwashIntensity > 0) {
+    flightPropwashForce.set(
+      Math.sin(flight.propwashPhase * 29.3 + flight.position.x * 1.7),
+      Math.sin(flight.propwashPhase * 23.7 + flight.position.z * 1.3) * 0.28,
+      Math.cos(flight.propwashPhase * 31.1 + flight.position.z * 1.9),
+    ).applyQuaternion(flight.orientation);
+    flight.impactAngularVelocity.addScaledVector(
+      flightPropwashForce,
+      propwashIntensity * 2.4 * flightTune.propwash / 100 * (flightTune.propDiameter / 5) * dt,
+    );
+  }
+  const targetMotorOutput = flight.throttle * flight.throttle;
+  flight.motorOutput += (targetMotorOutput - flight.motorOutput) * motorResponseAlpha;
+  const maximumThrustAcceleration = motorMaxThrustNewtons * 4 / vehicleMassKg;
+  flight.acceleration.copy(flight.up).multiplyScalar(maximumThrustAcceleration * flight.motorOutput);
   flight.acceleration.y -= 9.81;
-  flight.acceleration.addScaledVector(flight.velocity, -0.34);
+  flight.acceleration.addScaledVector(flight.velocity, -flightTune.airDrag);
   flight.velocity.addScaledVector(flight.acceleration, dt);
   flight.position.addScaledVector(flight.velocity, dt);
   resolveFlightWorldCollision();
@@ -12137,9 +13019,7 @@ function animate(now) {
     }
 
     sampleGamepad();
-    pollRestartCrsfSwitch();
     if (deviceStatusFrames++ % 12 === 0) {
-      updateSerialStatus();
       refreshInputSource();
     }
     if (flying) updateFlight(dt);
@@ -12174,6 +13054,14 @@ function animate(now) {
       }
     }
     if (environmentRoot.visible && activeBiome === 'neon-docks') {
+      const groundClearance = flying
+        ? Math.max(0, flight.position.y - terrainSurfaceYAt(activeBiome, flight.position.x, flight.position.z))
+        : Infinity;
+      propwashVisual.x = flight.position.x;
+      propwashVisual.z = flight.position.z;
+      propwashVisual.strength = flying
+        ? flight.throttle * flight.throttle * THREE.MathUtils.clamp(1 - groundClearance / 7, 0, 1)
+        : 0;
       updateGrassWindMeshes(environmentGrassWindMeshes, now * 0.001);
       updateNeonDocksWaterAnimation(now * 0.001);
     }

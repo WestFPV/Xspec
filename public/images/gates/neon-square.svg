@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 222" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#152638"/>
+      <stop offset="1" stop-color="#09131f"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="110" y1="39" x2="271" y2="182" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e5ffff"/>
+      <stop offset=".42" stop-color="#80f4ff"/>
+      <stop offset="1" stop-color="#36cde9"/>
+    </linearGradient>
+    <filter id="glow" x="63" y="15" width="258" height="198" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+  <rect width="384" height="222" fill="url(#bg)"/>
+  <g transform="translate(192 111) scale(1.28) translate(-192 -111)">
+  <path d="M111 41 266 60v115l-155-22V41Z" stroke="#46eaff" stroke-width="13" stroke-linejoin="round" opacity=".62" filter="url(#glow)"/>
+  <path d="M111 41 266 60v115l-155-22V41Z" stroke="url(#tube)" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M111 41 266 60v115l-155-22V41Z" stroke="#f1ffff" stroke-width="1.4" stroke-linejoin="round" opacity=".92"/>
+  <circle cx="111" cy="41" r="3" fill="#efffff"/>
+  <circle cx="266" cy="60" r="3" fill="#efffff"/>
+  </g>
+</svg>

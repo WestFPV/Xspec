@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 222" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#152638"/>
+      <stop offset="1" stop-color="#09131f"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="82" y1="50" x2="304" y2="204" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e5ffff"/>
+      <stop offset=".48" stop-color="#80f4ff"/>
+      <stop offset="1" stop-color="#36cde9"/>
+    </linearGradient>
+    <filter id="glow" x="60" y="23" width="274" height="194" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+  <rect width="384" height="222" fill="url(#bg)"/>
+  <g stroke="#46eaff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity=".58" filter="url(#glow)">
+    <path d="m91 78 111-31 99 7v108l-99-12L91 190V78Zm0 0 151 17v116m0-116 59-41m-59 41v108m-40-139v104"/>
+  </g>
+  <g stroke="url(#tube)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m91 78 111-31 99 7v108l-99-12L91 190V78Zm0 0 151 17v116m0-116 59-41m-59 41v108m-40-139v104"/>
+  </g>
+  <g stroke="#eaffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity=".88">
+    <path d="m91 78 111-31 99 7v108l-99-12L91 190V78Zm0 0 151 17v116m0-116 59-41m-59 41v108m-40-139v104"/>
+  </g>
+  <rect x="177" y="109" width="32" height="12" rx="4" fill="#123747" fill-opacity=".84" stroke="#bafaff" stroke-width="1.4"/>
+  <text x="193" y="117.4" fill="#efffff" font-family="Arial,sans-serif" font-size="6" font-weight="700" letter-spacing=".8" text-anchor="middle">S / F</text>
+  <circle cx="91" cy="78" r="3" fill="#efffff"/>
+  <circle cx="202" cy="47" r="3" fill="#efffff"/>
+  <circle cx="301" cy="54" r="3" fill="#efffff"/>
+</svg>

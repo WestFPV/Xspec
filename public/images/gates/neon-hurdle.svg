@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 222" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#152638"/>
+      <stop offset="1" stop-color="#09131f"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="115" y1="55" x2="268" y2="174" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e3ffff"/>
+      <stop offset=".42" stop-color="#b3faff"/>
+      <stop offset="1" stop-color="#68dceb"/>
+    </linearGradient>
+    <linearGradient id="panelSide" x1="267" y1="57" x2="291" y2="174" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3b9db3"/>
+      <stop offset="1" stop-color="#15516a"/>
+    </linearGradient>
+    <filter id="glow" x="69" y="16" width="254" height="194" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+  <rect width="384" height="222" fill="url(#bg)"/>
+  <g transform="translate(192 111) scale(1.25) translate(-192 -111)">
+  <path d="m117 42 143 20 7 118-145-20-5-118Z" fill="#48eaff" opacity=".7" filter="url(#glow)"/>
+  <path d="m117 42 143 20 7 118-145-20-5-118Z" fill="url(#panel)" stroke="#e2ffff" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="m117 42 143 20-2 14-139-19-2-15Z" fill="#f1ffff" fill-opacity=".3"/>
+  <path d="m260 62 13-8 6 118-12 8-7-118Z" fill="url(#panelSide)" stroke="#8af5ff" stroke-opacity=".78" stroke-width="1.2"/>
+  <path d="m128 52 121 17m-118-8 1 92m109-80 4 91" stroke="#f4ffff" stroke-opacity=".28" stroke-width="1.2"/>
+  <rect x="181" y="104" width="35" height="15" rx="4" fill="#299db3" fill-opacity=".82" stroke="#e0ffff" stroke-opacity=".9"/>
+  <text x="198.5" y="114.3" fill="#f2ffff" font-family="Arial,sans-serif" font-size="7" font-weight="700" letter-spacing="1.2" text-anchor="middle">S / F</text>
+  <circle cx="117" cy="42" r="3" fill="#efffff"/>
+  <circle cx="260" cy="62" r="3" fill="#efffff"/>
+  </g>
+</svg>

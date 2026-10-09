@@ -659,6 +659,7 @@ function publicCommunityTrack(track) {
     points: track.points,
     startFinishIndex: Number.isSafeInteger(track.startFinishIndex) && track.startFinishIndex >= 0 && track.startFinishIndex < track.points.length ? track.startFinishIndex : 0,
     gateRotations: Array.isArray(track.gateRotations) ? track.gateRotations : [],
+    gateEntryDirections: Array.isArray(track.gateEntryDirections) ? track.gateEntryDirections : [],
     laps: Number.isSafeInteger(track.laps) && track.laps >= 1 && track.laps <= 5 ? track.laps : 1,
     objects: Array.isArray(track.objects) ? track.objects : [],
     imageDataUrl: track.imageDataUrl,
@@ -706,6 +707,17 @@ async function handleCommunityTracks(request, response) {
   }
   const gateRotations = Array.isArray(submittedRotations)
     ? submittedRotations.map((rotation) => Math.round((((rotation % 360) + 360) % 360) * 100) / 100)
+    : [];
+  const submittedEntryDirections = body.gateEntryDirections;
+  if (submittedEntryDirections !== undefined && (!Array.isArray(submittedEntryDirections) || submittedEntryDirections.length !== points.length
+    || submittedEntryDirections.some((directions) => {
+      const values = Array.isArray(directions) ? directions : [directions];
+      return values.length < 1 || values.length > 10 || values.some((direction) => direction !== 1 && direction !== -1 && direction !== 0);
+    }))) {
+    return json(response, 400, { error: 'Track gate entry directions are invalid.' });
+  }
+  const gateEntryDirections = Array.isArray(submittedEntryDirections)
+    ? submittedEntryDirections.map((directions) => Array.isArray(directions) ? [...directions] : [directions])
     : [];
 
   const requestedObjects = body.objects ?? [];
@@ -782,6 +794,7 @@ async function handleCommunityTracks(request, response) {
     points,
     startFinishIndex,
     gateRotations,
+    gateEntryDirections,
     laps,
     objects,
     imageDataUrl: body.imageDataUrl,

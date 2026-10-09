@@ -32,7 +32,7 @@ Tournament mode stays locked until a future event is scheduled. Set `XSPEC_TOURN
 
 ## Track builder assets
 
-The Track Builder race-gate library uses four imported GLB models in `public/models/gates/`: `neon-square.glb`, `neon-ladder.glb`, `neon-flag.glb`, and `neon-hurdle.glb`. The models keep their authored scale; the editor only centers them horizontally and places their lowest point on the ground. The course editor controls placement, rotation, and scale. If a model cannot load, a procedural preview is shown instead. The Relay podium gate is a separate Builder prop and remains available in Relay mode.
+The Track Builder race-gate library uses five imported GLB models in `public/models/gates/`: `neon-square.glb`, `neon-ladder.glb`, `neon-flag.glb`, `neon-hurdle.glb`, and `neon-dive.glb`. Models keep their authored scale except Neon Dive, which is scaled to match Neon Square's overall size. The editor centers models horizontally and places their lowest point on the ground. The course editor controls placement, rotation, and scale. If a model cannot load, a procedural preview is shown instead. The Relay podium gate is a separate Builder prop and remains available in Relay mode.
 
 ## Production build
 
