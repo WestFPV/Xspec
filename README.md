@@ -62,7 +62,7 @@ If traffic grows, monitor the Worker and Durable Object request/CPU/storage grap
    npm run cf:deploy
    ```
 
-3. In the Cloudflare dashboard, open **Workers & Pages** → `xspec-flight-lab` → **Settings** → **Variables and Secrets**. Add these as secrets:
+3. In the Cloudflare dashboard, open **Workers & Pages** → `xspec` → **Settings** → **Variables and Secrets**. Add these as secrets:
    - `AUTH_CODE_SECRET`: a long, unique random secret. Do not reuse a password.
    - `RESEND_API_KEY`: the API key for a verified Resend sender.
    - `AUTH_FROM_EMAIL`: the verified sender address.

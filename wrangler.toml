@@ -1,4 +1,4 @@
-name = "xspec-flight-lab"
+name = "xspec"
 main = "worker.mjs"
 compatibility_date = "2026-10-08"
 compatibility_flags = ["nodejs_compat"]
