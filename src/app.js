@@ -2721,10 +2721,10 @@ function createGateIndicator(gate) {
 }
 
 const gateTypes = {
-  'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', raceAsset: true },
-  'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', raceAsset: true },
-  'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', raceAsset: true },
-  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true },
+  'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', targetLongestDimension: 9.4, raceAsset: true },
+  'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', targetLongestDimension: 8.1, raceAsset: true },
+  'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', targetLongestDimension: 6.2, raceAsset: true },
+  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', targetLongestDimension: 5.67, raceAsset: true },
 };
 
 function createProceduralGate(type, hue = 'cyan') {
@@ -3543,9 +3543,12 @@ function loadGateModel(type) {
           return;
         }
         const center = bounds.getCenter(new THREE.Vector3());
+        const dimensions = bounds.getSize(new THREE.Vector3());
+        const longestDimension = Math.max(dimensions.x, dimensions.y, dimensions.z);
         const normalized = new THREE.Group();
         normalized.position.set(-center.x, -bounds.min.y, -center.z);
         normalized.add(gltf.scene);
+        normalized.scale.setScalar(config.targetLongestDimension / longestDimension);
         normalized.userData.importedGate = true;
         normalized.traverse((node) => {
           if (!node.isMesh) return;
