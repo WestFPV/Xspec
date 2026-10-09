@@ -3548,7 +3548,7 @@ function loadGateModel(type) {
         const normalized = new THREE.Group();
         normalized.position.set(-center.x, -bounds.min.y, -center.z);
         normalized.add(gltf.scene);
-        normalized.scale.setScalar(config.targetLongestDimension / longestDimension);
+        normalized.scale.setScalar(config.targetLongestDimension / longestDimension / 1.5);
         normalized.userData.importedGate = true;
         normalized.traverse((node) => {
           if (!node.isMesh) return;
