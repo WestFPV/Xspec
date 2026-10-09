@@ -1,6 +1,8 @@
 import { configureWorkerState, dispatchApiRequest, exportWorkerState } from './api.mjs';
 
 const stateChunkCharacters = 300_000;
+const maxRequestBodyBytes = 1_000_000;
+const requestChunkBytes = 64 * 1024;
 
 function responseAdapter() {
   let status = 200;
@@ -45,8 +47,35 @@ function requestAdapter(request) {
       remoteAddress: request.headers.get('cf-connecting-ip') || 'unknown',
     },
     async *[Symbol.asyncIterator]() {
-      const bytes = Buffer.from(await request.arrayBuffer());
-      if (bytes.length) yield bytes;
+      const reader = request.body?.getReader();
+      if (!reader) return;
+      let totalBytes = 0;
+      let complete = false;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            complete = true;
+            return;
+          }
+          for (let offset = 0; offset < value.byteLength;) {
+            const chunkLength = Math.min(
+              requestChunkBytes,
+              value.byteLength - offset,
+              maxRequestBodyBytes + 1 - totalBytes,
+            );
+            yield Buffer.from(value.subarray(offset, offset + chunkLength));
+            offset += chunkLength;
+            totalBytes += chunkLength;
+            if (totalBytes > maxRequestBodyBytes) return;
+          }
+        }
+      } finally {
+        if (!complete) {
+          try { await reader.cancel(); } catch { /* The request stream may already be closed. */ }
+        }
+        reader.releaseLock();
+      }
     },
   };
 }

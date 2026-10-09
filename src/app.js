@@ -413,6 +413,19 @@ const communityPropRoot = new THREE.Group();
 communityPropRoot.name = 'Community track environment objects';
 const builderPropRoot = new THREE.Group();
 builderPropRoot.name = 'User placed environment objects';
+const builderRaceLineRoot = new THREE.Group();
+builderRaceLineRoot.name = 'Transparent track builder race line';
+builderRaceLineRoot.visible = false;
+const builderRaceLinePathRoot = new THREE.Group();
+builderRaceLinePathRoot.name = 'Race line path tubes';
+const builderRaceLineHandleRoot = new THREE.Group();
+builderRaceLineHandleRoot.name = 'Movable race line control points';
+builderRaceLineRoot.add(builderRaceLinePathRoot, builderRaceLineHandleRoot);
+let builderRaceLineGenerated = false;
+let builderRaceLinePoints = [];
+let builderRaceLineHandles = [];
+let builderRaceLineGateRefs = [];
+let selectedBuilderRaceLinePointIndex = null;
 const builderEnvironmentBuildings = [];
 let selectedEnvironmentBuildingId = null;
 const builderGhostRoot = new THREE.Group();
@@ -424,6 +437,9 @@ builderFlightRoot.visible = false;
 const biomeLightRoot = new THREE.Group();
 const menuBackdropRoot = new THREE.Group();
 menuBackdropRoot.name = 'Menu plaza and hangar backdrop';
+const menuPlanetsRoot = new THREE.Group();
+menuPlanetsRoot.name = 'World anchored planets around the sky platform';
+menuBackdropRoot.add(menuPlanetsRoot);
 const menuStreetLampRoot = new THREE.Group();
 menuStreetLampRoot.name = 'Menu street lamps';
 menuBackdropRoot.add(menuStreetLampRoot);
@@ -432,9 +448,12 @@ menuPlatformCollisionRoot.name = 'Invisible sky platform flight collider';
 menuPlatformCollisionRoot.visible = false;
 let menuGrassWindUniform = null;
 let menuStarTimeUniform = null;
+let menuStarMusicUniforms = null;
+let menuStarField = null;
 let menuMoonGroup = null;
-const menuMoonLocalOffset = new THREE.Vector3(-0.24, 0.2, -1).normalize();
-const menuMoonWorldOffset = new THREE.Vector3();
+let menuMoonOrbit = null;
+let menuPlanetMotionTime = 0;
+const menuPlanetVisuals = [];
 const menuCityRoot = new THREE.Group();
 menuCityRoot.name = 'Menu cyber city skyline';
 menuCityRoot.visible = true;
@@ -447,8 +466,10 @@ const menuDroneBaseY = 3.48;
 const REQUIRED_TRACK_PODIUM_COUNT = 8;
 const RELAY_STATION_COUNT = 4;
 const RELAY_GATE_PODIUM_DISTANCE = 8;
+const RELAY_PODIUM_STAGE_FORWARD_OFFSET = 2.6;
 const RED_RACE_PODIUM_TOP_Y = 3.1325;
 const RED_RACE_PODIUM_HEADING_OFFSET = Math.PI / 2;
+const RED_RACE_PODIUM_DRONE_LEFT_TURN = Math.PI / 2;
 const menuFlybys = [];
 const menuGrassWindMeshes = [];
 const environmentGrassWindMeshes = [];
@@ -460,7 +481,7 @@ let competitiveBannerData = { leaders: [], teams: [], nextTournament: null };
 let competitiveBannerSlide = 0;
 let citySignTextures = null;
 let playgroundGateStructures = null;
-world.add(environmentRoot, gateRoot, trackRoot, communityPropRoot, builderPropRoot, builderGhostRoot, builderFlightRoot, biomeLightRoot, menuBackdropRoot, menuPlatformCollisionRoot, menuCityRoot, menuStageRoot, menuAmbientRoot, menuInfoBannerRoot);
+world.add(environmentRoot, gateRoot, trackRoot, communityPropRoot, builderPropRoot, builderRaceLineRoot, builderGhostRoot, builderFlightRoot, biomeLightRoot, menuBackdropRoot, menuPlatformCollisionRoot, menuCityRoot, menuStageRoot, menuAmbientRoot, menuInfoBannerRoot);
 const flightCollisionTarget = new THREE.Vector3();
 const flightCollisionDelta = new THREE.Vector3();
 const flightCollisionMatrix = new THREE.Matrix4();
@@ -621,6 +642,14 @@ builderTransformControls.addEventListener('dragging-changed', (event) => {
 builderTransformControls.addEventListener('objectChange', () => {
   const object = builderTransformControls.object;
   if (!object) return;
+  if (object.userData.isBuilderRaceLineHandle) {
+    const pointIndex = object.userData.raceLinePointIndex;
+    if (!Number.isInteger(pointIndex) || !builderRaceLinePoints[pointIndex]) return;
+    builderRaceLinePoints[pointIndex].copy(object.position);
+    builderTransformChanged = true;
+    refreshBuilderRaceLineGeometry();
+    return;
+  }
   const prop = builderProps.find((item) => item.id === selectedBuilderPropId);
   if (prop && object.userData.propId === prop.id) {
     prop.x = THREE.MathUtils.clamp(object.position.x, -320, 320);
@@ -668,6 +697,7 @@ builderTransformControls.addEventListener('objectChange', () => {
     object.scale.set(gate.scaleX, gate.scaleY, gate.scaleZ);
     gate.scale = (gate.scaleX + gate.scaleY + gate.scaleZ) / 3;
   }
+  updateBuilderRelayPodiumGateIndicators();
   builderTransformChanged = true;
   builderSelectionHelper.update();
 });
@@ -822,14 +852,13 @@ function createRedRacePodium(labelFace = null) {
   box(podiumStructure, [5.7, 0.32, 3.75], [0, 2.88, 0], redRacePodiumMaterials.deck);
   box(podiumStructure, [5.45, 0.055, 3.52], [0, 3.07, 0], redRacePodiumMaterials.redEdge);
   box(podiumStructure, [5.2, 0.035, 3.26], [0, 3.115, 0], redRacePodiumMaterials.standRed);
-  for (const side of [-1, 1]) {
-    box(podiumStructure, [0.12, 0.58, 3.6], [side * 2.91, 2.85, 0], redRacePodiumMaterials.nameplate);
-    if (labelFace) {
-      const plateText = new THREE.Mesh(new THREE.PlaneGeometry(3.45, 0.52), labelFace);
-      plateText.position.set(side * 2.985, 2.85, 0);
-      plateText.rotation.y = side * Math.PI / 2;
-      podiumStructure.add(plateText);
-    }
+  const frontSide = -1;
+  box(podiumStructure, [0.12, 0.58, 3.6], [frontSide * 2.91, 2.85, 0], redRacePodiumMaterials.nameplate);
+  if (labelFace) {
+    const plateText = new THREE.Mesh(new THREE.PlaneGeometry(3.45, 0.52), labelFace);
+    plateText.position.set(frontSide * 2.985, 2.85, 0);
+    plateText.rotation.y = frontSide * Math.PI / 2;
+    podiumStructure.add(plateText);
   }
   for (const side of [-1, 1]) {
     box(podiumStructure, [0.16, 0.18, 3.5], [side * 3.46, 0.45, 0], redRacePodiumMaterials.holeTrim);
@@ -1154,7 +1183,7 @@ function buildMenuSkyPlatform() {
   }
   buildMenuSponsorBoards();
 
-  const starCount = 12000;
+  const starCount = 24000;
   const positions = new Float32Array(starCount * 3);
   const starSizes = new Float32Array(starCount);
   const starColors = new Float32Array(starCount * 3);
@@ -1172,7 +1201,7 @@ function buildMenuSkyPlatform() {
   ];
   for (let index = 0; index < starCount; index += 1) {
     const angle = random() * Math.PI * 2;
-    const vertical = 0.012 + random() * 0.985;
+    const vertical = random() * 2 - 1;
     const horizontal = Math.sqrt(1 - vertical * vertical);
     const distance = 900 + random() * 1500;
     positions[index * 3] = Math.cos(angle) * horizontal * distance;
@@ -1192,18 +1221,30 @@ function buildMenuSkyPlatform() {
   starGeometry.setAttribute('aColor', new THREE.BufferAttribute(starColors, 3));
   starGeometry.setAttribute('aTwinkle', new THREE.BufferAttribute(starTwinkles, 1));
   const starMaterial = new THREE.ShaderMaterial({
-    uniforms: { uTime: { value: 0 } },
+    uniforms: {
+      uTime: { value: 0 },
+      uMusicEnergy: { value: 0 },
+      uMusicBass: { value: 0 },
+      uMusicMids: { value: 0 },
+      uMusicHigh: { value: 0 },
+      uMusicHue: { value: 0 },
+    },
     vertexShader: `
       attribute float aSize;
       attribute vec3 aColor;
       attribute float aTwinkle;
       uniform float uTime;
+      uniform float uMusicEnergy;
+      uniform float uMusicHue;
       varying vec3 vStarColor;
       varying float vStarAlpha;
       varying float vStarTwinkle;
       void main() {
+        float hueOffset = uMusicHue + aTwinkle * 0.19;
+        vec3 spectrum = 0.5 + 0.5 * cos(6.28318 * (hueOffset + vec3(0.0, 0.33, 0.67)));
+        float colorMix = clamp(uMusicEnergy * 1.8, 0.0, 0.88);
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-        vStarColor = aColor;
+        vStarColor = mix(aColor, spectrum, colorMix);
         vStarAlpha = 0.48 + aTwinkle * 0.48;
         vStarTwinkle = aTwinkle;
         gl_PointSize = max(1.3, aSize * (420.0 / max(1.0, -viewPosition.z)));
@@ -1233,10 +1274,17 @@ function buildMenuSkyPlatform() {
     toneMapped: false,
   });
   menuStarTimeUniform = starMaterial.uniforms.uTime;
-  const starField = new THREE.Points(starGeometry, starMaterial);
-  starField.name = 'Dense high detail starfield around the sky platform';
-  starField.renderOrder = -1;
-  menuBackdropRoot.add(starField);
+  menuStarMusicUniforms = {
+    energy: starMaterial.uniforms.uMusicEnergy,
+    bass: starMaterial.uniforms.uMusicBass,
+    mids: starMaterial.uniforms.uMusicMids,
+    high: starMaterial.uniforms.uMusicHigh,
+    hue: starMaterial.uniforms.uMusicHue,
+  };
+  menuStarField = new THREE.Points(starGeometry, starMaterial);
+  menuStarField.name = 'Dense high detail starfield around the sky platform';
+  menuStarField.renderOrder = -1;
+  menuBackdropRoot.add(menuStarField);
 
   const moonCanvas = document.createElement('canvas');
   moonCanvas.width = 1024;
@@ -1270,36 +1318,301 @@ function buildMenuSkyPlatform() {
   const moonTexture = new THREE.CanvasTexture(moonCanvas);
   moonTexture.colorSpace = THREE.SRGBColorSpace;
   moonTexture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  const moonMaterial = new THREE.MeshBasicMaterial({ map: moonTexture, color: 0xa9bad4, toneMapped: false });
+  const moonMaterial = new THREE.MeshBasicMaterial({ map: moonTexture, color: 0xa9bad4, toneMapped: false, fog: false });
   const moonMesh = new THREE.Mesh(new THREE.SphereGeometry(46, 64, 48), moonMaterial);
   moonMesh.name = 'Textured moon behind the sky platform';
-  moonMesh.position.z = -18;
   menuMoonGroup = new THREE.Group();
-  menuMoonGroup.name = 'Moon and soft lunar glow';
+  menuMoonGroup.name = 'World orbiting moon';
   menuMoonGroup.add(moonMesh);
-  const glowCanvas = document.createElement('canvas');
-  glowCanvas.width = 256;
-  glowCanvas.height = 256;
-  const glowContext = glowCanvas.getContext('2d');
-  const glow = glowContext.createRadialGradient(128, 128, 24, 128, 128, 128);
-  glow.addColorStop(0, 'rgba(147,190,255,0.34)');
-  glow.addColorStop(0.38, 'rgba(107,157,237,0.16)');
-  glow.addColorStop(1, 'rgba(74,122,205,0)');
-  glowContext.fillStyle = glow;
-  glowContext.fillRect(0, 0, 256, 256);
-  const glowTexture = new THREE.CanvasTexture(glowCanvas);
-  const moonHalo = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTexture,
-    color: 0xa6c9ff,
-    transparent: true,
-    opacity: 0.58,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  }));
-  moonHalo.scale.set(190, 190, 1);
-  moonHalo.position.z = -75;
-  menuMoonGroup.add(moonHalo);
+  menuMoonOrbit = {
+    phase: Math.random() * Math.PI * 2,
+    radiusX: 3100 + Math.random() * 180,
+    radiusZ: 3100 + Math.random() * 180,
+    height: 650 + Math.random() * 220,
+    heightAmplitude: 160 + Math.random() * 110,
+    pathWobble: [30 + Math.random() * 45, 30 + Math.random() * 45],
+    pathPhase: Math.random() * Math.PI * 2,
+    pathFrequency: [2 + Math.floor(Math.random() * 2), 2 + Math.floor(Math.random() * 2)],
+    verticalPhase: Math.random() * Math.PI * 2,
+    speed: 0.035 + Math.random() * 0.012,
+  };
+  const moonStartAngle = menuMoonOrbit.phase;
+  menuMoonGroup.position.set(
+    Math.cos(moonStartAngle) * menuMoonOrbit.radiusX
+      + Math.sin(moonStartAngle * menuMoonOrbit.pathFrequency[0] + menuMoonOrbit.pathPhase) * menuMoonOrbit.pathWobble[0],
+    menuMoonOrbit.height + Math.sin(moonStartAngle * 0.72 + menuMoonOrbit.verticalPhase) * menuMoonOrbit.heightAmplitude,
+    menuPlatformCenterZ + Math.sin(moonStartAngle) * menuMoonOrbit.radiusZ
+      + Math.cos(moonStartAngle * menuMoonOrbit.pathFrequency[1] + menuMoonOrbit.pathPhase * 0.73) * menuMoonOrbit.pathWobble[1],
+  );
+
+  const createMusicPlanetTexture = (definition) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    const base = context.createLinearGradient(0, 0, 0, canvas.height);
+    base.addColorStop(0, '#080d20');
+    base.addColorStop(0.22, definition.base);
+    base.addColorStop(0.55, definition.bands[0]);
+    base.addColorStop(0.82, definition.bands[1]);
+    base.addColorStop(1, '#050918');
+    context.fillStyle = base;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (definition.style === 'gas') {
+      for (let band = 0; band < 38; band += 1) {
+        const y = band * canvas.height / 38;
+        const height = 3 + random() * 14;
+        const amplitude = 4 + random() * 26;
+        const phase = random() * Math.PI * 2;
+        context.globalAlpha = 0.12 + random() * 0.22;
+        context.fillStyle = definition.bands[Math.floor(random() * definition.bands.length)];
+        context.beginPath();
+        context.moveTo(0, y);
+        for (let x = 0; x <= canvas.width; x += 48) {
+          const wave = Math.sin(x * 0.006 + phase) * amplitude + Math.sin(x * 0.017 + phase * 0.63) * amplitude * 0.32;
+          context.lineTo(x, y + wave);
+        }
+        for (let x = canvas.width; x >= 0; x -= 48) {
+          const wave = Math.sin(x * 0.006 + phase) * amplitude + Math.sin(x * 0.017 + phase * 0.63) * amplitude * 0.32;
+          context.lineTo(x, y + height + wave);
+        }
+        context.closePath();
+        context.fill();
+      }
+      for (let storm = 0; storm < 12; storm += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        const radiusX = 18 + random() * 72;
+        const radiusY = 7 + random() * 28;
+        const stormGlow = context.createRadialGradient(x, y, 1, x, y, radiusX);
+        stormGlow.addColorStop(0, 'rgba(241,249,255,0.66)');
+        stormGlow.addColorStop(0.28, 'rgba(194,224,255,0.34)');
+        stormGlow.addColorStop(0.72, 'rgba(128,91,255,0.2)');
+        stormGlow.addColorStop(1, 'rgba(8,13,32,0)');
+        context.save();
+        context.translate(x, y);
+        context.rotate((random() - 0.5) * 0.35);
+        context.scale(1, radiusY / radiusX);
+        context.fillStyle = stormGlow;
+        context.beginPath();
+        context.arc(0, 0, radiusX, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      }
+    } else if (definition.style === 'marbled') {
+      // Broad, curled cloud swirls keep this surface colorful without dark crater pits.
+      for (let vortex = 0; vortex < 10; vortex += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        const radiusX = 34 + random() * 96;
+        const radiusY = 12 + random() * 40;
+        const rotation = (random() - 0.5) * 0.8;
+        context.save();
+        context.translate(x, y);
+        context.rotate(rotation);
+        const cloudGlow = context.createRadialGradient(0, 0, 1, 0, 0, radiusX);
+        cloudGlow.addColorStop(0, definition.bands[0]);
+        cloudGlow.addColorStop(0.46, definition.bands[1]);
+        cloudGlow.addColorStop(1, 'rgba(8,13,32,0)');
+        context.globalAlpha = 0.24 + random() * 0.22;
+        context.fillStyle = cloudGlow;
+        context.beginPath();
+        context.ellipse(0, 0, radiusX, radiusY, 0, 0, Math.PI * 2);
+        context.fill();
+        for (let curl = 0; curl < 4; curl += 1) {
+          context.strokeStyle = definition.bands[curl % definition.bands.length];
+          context.globalAlpha = 0.2 + random() * 0.25;
+          context.lineWidth = 2 + random() * 5;
+          context.beginPath();
+          context.ellipse(0, 0, radiusX * (0.34 + curl * 0.14), radiusY * (0.32 + curl * 0.15), 0, -0.45, Math.PI * 1.55);
+          context.stroke();
+        }
+        context.restore();
+      }
+    } else if (definition.style === 'ocean') {
+      // Large broken landmasses and bright coastlines give this world a clear ocean look.
+      for (let landmass = 0; landmass < 13; landmass += 1) {
+        const x = random() * canvas.width;
+        const y = 45 + random() * (canvas.height - 90);
+        const width = 35 + random() * 115;
+        const height = 18 + random() * 50;
+        context.save();
+        context.translate(x, y);
+        context.rotate((random() - 0.5) * 0.6);
+        context.fillStyle = definition.bands[1];
+        context.globalAlpha = 0.3 + random() * 0.28;
+        context.beginPath();
+        context.moveTo(-width * 0.55, -height * 0.12);
+        context.bezierCurveTo(-width * 0.45, -height * 0.78, -width * 0.04, -height * 0.55, width * 0.08, -height * 0.72);
+        context.bezierCurveTo(width * 0.7, -height * 0.52, width * 0.36, -height * 0.08, width * 0.58, height * 0.2);
+        context.bezierCurveTo(width * 0.24, height * 0.78, -width * 0.12, height * 0.32, -width * 0.38, height * 0.55);
+        context.bezierCurveTo(-width * 0.76, height * 0.24, -width * 0.3, height * 0.06, -width * 0.55, -height * 0.12);
+        context.closePath();
+        context.fill();
+        context.strokeStyle = definition.bands[0];
+        context.globalAlpha = 0.42;
+        context.lineWidth = 2 + random() * 5;
+        context.stroke();
+        context.restore();
+      }
+      for (let cloud = 0; cloud < 70; cloud += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        context.strokeStyle = definition.bands[0];
+        context.globalAlpha = 0.1 + random() * 0.18;
+        context.lineWidth = 1 + random() * 5;
+        context.beginPath();
+        context.ellipse(x, y, 8 + random() * 45, 2 + random() * 8, random() * 0.5, 0, Math.PI * 2);
+        context.stroke();
+      }
+    } else if (definition.style === 'craters') {
+      // Rim-lit craters and uneven color patches make this smaller world rocky.
+      for (let patch = 0; patch < 120; patch += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        const radius = 12 + random() * 72;
+        const patchGlow = context.createRadialGradient(x - radius * 0.3, y - radius * 0.35, 1, x, y, radius);
+        patchGlow.addColorStop(0, 'rgba(255,226,207,0.18)');
+        patchGlow.addColorStop(0.58, 'rgba(255,105,153,0.07)');
+        patchGlow.addColorStop(1, 'rgba(8,13,32,0)');
+        context.fillStyle = patchGlow;
+        context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+      }
+      for (let crater = 0; crater < 180; crater += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        const radius = 2 + Math.pow(random(), 2.2) * 31;
+        const craterShade = context.createRadialGradient(x - radius * 0.35, y - radius * 0.38, radius * 0.08, x, y, radius);
+        craterShade.addColorStop(0, 'rgba(255,230,229,0.18)');
+        craterShade.addColorStop(0.68, 'rgba(25,15,37,0.05)');
+        craterShade.addColorStop(0.82, 'rgba(12,8,23,0.48)');
+        craterShade.addColorStop(1, 'rgba(255,135,193,0.24)');
+        context.fillStyle = craterShade;
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.fill();
+      }
+    } else if (definition.style === 'fractured') {
+      // Angular glowing fissures create a volcanic, glassy surface.
+      for (let plate = 0; plate < 95; plate += 1) {
+        const x = random() * canvas.width;
+        const y = random() * canvas.height;
+        const width = 18 + random() * 85;
+        const height = 8 + random() * 38;
+        context.globalAlpha = 0.08 + random() * 0.16;
+        context.fillStyle = definition.bands[Math.floor(random() * definition.bands.length)];
+        context.beginPath();
+        context.moveTo(x - width, y - height * 0.2);
+        context.lineTo(x - width * 0.25, y - height);
+        context.lineTo(x + width, y - height * 0.45);
+        context.lineTo(x + width * 0.35, y + height);
+        context.lineTo(x - width * 0.8, y + height * 0.55);
+        context.closePath();
+        context.fill();
+      }
+      for (let crack = 0; crack < 82; crack += 1) {
+        let x = random() * canvas.width;
+        let y = random() * canvas.height;
+        const length = 40 + random() * 190;
+        context.strokeStyle = definition.bands[0];
+        context.globalAlpha = 0.18 + random() * 0.48;
+        context.lineWidth = 0.8 + random() * 2.3;
+        context.beginPath();
+        context.moveTo(x, y);
+        for (let step = 0; step < 5; step += 1) {
+          x += (random() - 0.5) * 42;
+          y += length / 5;
+          context.lineTo(x, y);
+        }
+        context.stroke();
+      }
+    }
+    context.globalAlpha = 1;
+
+    const surfacePixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let pixel = 0; pixel < surfacePixels.data.length; pixel += 4) {
+      const luminance = surfacePixels.data[pixel] * 0.2126
+        + surfacePixels.data[pixel + 1] * 0.7152
+        + surfacePixels.data[pixel + 2] * 0.0722;
+      const gray = Math.min(255, 12 + luminance * 0.9);
+      surfacePixels.data[pixel] = gray;
+      surfacePixels.data[pixel + 1] = gray;
+      surfacePixels.data[pixel + 2] = gray;
+    }
+    context.putImageData(surfacePixels, 0, 0);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    return texture;
+  };
+
+  const musicPlanets = [
+    { radius: 168, base: '#102450', bands: ['#1bd6ec', '#5867ff', '#b84ce6'], hue: 0.53, rotationSpeed: 0.024, style: 'gas', ring: 0x7adfff, ringTilt: 1.02 },
+    { radius: 132, base: '#26113e', bands: ['#ff56bb', '#7550ee', '#49b8e6'], hue: 0.83, rotationSpeed: -0.018, style: 'marbled', ring: 0xff9dde, ringTilt: 0.82 },
+    { radius: 96, base: '#123740', bands: ['#43f2bc', '#45a8e9', '#b3f06a'], hue: 0.39, rotationSpeed: 0.033, style: 'ocean', ring: 0x8dffc9, ringTilt: 1.14 },
+    { radius: 72, base: '#3a1f22', bands: ['#ff8d55', '#de4fa1', '#f2cf72'], hue: 0.06, rotationSpeed: -0.027, style: 'fractured', ring: 0xffc17d, ringTilt: 0.94 },
+  ];
+  const orbitStartPhase = Math.random() * Math.PI * 2;
+  const sharedOrbitSpeed = 0.045 + Math.random() * 0.02;
+  musicPlanets.forEach((definition, index) => {
+    const planet = new THREE.Group();
+    const orbitPhase = orbitStartPhase + index * Math.PI / 2;
+    const orbitRadiusX = 2100 + Math.random() * 280;
+    const orbitRadiusZ = 2100 + Math.random() * 280;
+    const pathWobble = [35 + Math.random() * 65, 35 + Math.random() * 65];
+    const pathPhase = Math.random() * Math.PI * 2;
+    const pathFrequency = [2 + Math.floor(Math.random() * 2), 2 + Math.floor(Math.random() * 2)];
+    const heightCenter = 400 + Math.random() * 350;
+    const heightAmplitude = 120 + Math.random() * 180;
+    const verticalPhase = Math.random() * Math.PI * 2;
+    const startX = Math.cos(orbitPhase) * orbitRadiusX
+      + Math.sin(orbitPhase * pathFrequency[0] + pathPhase) * pathWobble[0];
+    const startY = heightCenter + Math.sin(orbitPhase * 0.72 + verticalPhase) * heightAmplitude;
+    const startZ = menuPlatformCenterZ + Math.sin(orbitPhase) * orbitRadiusZ
+      + Math.cos(orbitPhase * pathFrequency[1] + pathPhase * 0.73) * pathWobble[1];
+    planet.position.set(startX, startY, startZ);
+    const sphere = new THREE.SphereGeometry(definition.radius, 64, 48);
+    const texture = createMusicPlanetTexture(definition);
+    const surface = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({ map: texture, color: 0xc9cdd4, toneMapped: false, fog: false }));
+    planet.add(surface);
+    const rings = [];
+    if (definition.ring) {
+      const outerRing = new THREE.Mesh(
+        new THREE.RingGeometry(definition.radius * 1.08, definition.radius * 1.82, 128),
+        new THREE.MeshBasicMaterial({ color: definition.ring, transparent: true, opacity: 0.19, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false }),
+      );
+      outerRing.rotation.set(definition.ringTilt, 0.12 + index * 0.08, 0.16);
+      rings.push({ mesh: outerRing, baseOpacity: 0.19, hueOffset: 0.1, musicBand: 'bass', pulseAmount: 0.07, spinSpeed: 0.012 + index * 0.002 });
+      planet.add(outerRing);
+      const innerRing = new THREE.Mesh(
+        new THREE.RingGeometry(definition.radius * 1.015, definition.radius * 1.1, 128),
+        new THREE.MeshBasicMaterial({ color: definition.ring, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false }),
+      );
+      innerRing.rotation.copy(outerRing.rotation);
+      rings.push({ mesh: innerRing, baseOpacity: 0.28, hueOffset: 0.24, musicBand: 'mids', pulseAmount: 0.04, spinSpeed: -0.02 - index * 0.003 });
+      planet.add(innerRing);
+    }
+    menuPlanetsRoot.add(planet);
+    menuPlanetVisuals.push({
+      root: planet,
+      basePosition: new THREE.Vector3(0, heightCenter, menuPlatformCenterZ),
+      surface,
+      rings,
+      hueOffset: definition.hue,
+      rotationSpeed: definition.rotationSpeed,
+      orbitPhase,
+      orbitRadiusX,
+      orbitRadiusZ,
+      pathWobble,
+      pathSpeed: sharedOrbitSpeed,
+      pathPhase,
+      pathFrequency,
+      heightAmplitude,
+      verticalPhase,
+    });
+  });
   menuBackdropRoot.add(menuMoonGroup);
 }
 
@@ -2775,18 +3088,20 @@ const importedNeonGateScale = 0.408575;
 const importedNeonGateEmissiveIntensity = 0.75;
 const gateGlowReferenceColor = new THREE.Color(colors.cyan);
 const gateGlowReferenceLuminance = gateGlowReferenceColor.r * 0.2126 + gateGlowReferenceColor.g * 0.7152 + gateGlowReferenceColor.b * 0.0722;
+const gateGlowReferenceBoost = 2;
 function gateGlowIntensityForColor(color, baseIntensity) {
   const linearColor = new THREE.Color(color);
   const luminance = linearColor.r * 0.2126 + linearColor.g * 0.7152 + linearColor.b * 0.0722;
   const luminanceBoost = Math.pow(gateGlowReferenceLuminance / Math.max(luminance, 0.001), 2);
-  return baseIntensity * Math.max(1, luminanceBoost);
+  const referenceBoost = linearColor.equals(gateGlowReferenceColor) ? gateGlowReferenceBoost : 1;
+  return baseIntensity * Math.max(referenceBoost, luminanceBoost);
 }
 
 const gateTypes = {
   'neon-square': { name: 'Neon Square', model: '/models/gates/neon-square.glb', raceAsset: true },
   'neon-ladder': { name: 'Neon Ladder', model: '/models/gates/neon-ladder.glb', raceAsset: true },
   'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', raceAsset: true },
-  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true },
+  'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true, glowMultiplier: 0.78 },
   'neon-dive': { name: 'Neon Dive', model: '/models/gates/neon-dive.glb', raceAsset: true, modelScale: 0.0489 },
 };
 
@@ -2808,6 +3123,7 @@ const gatePassBoundaryOpenings = {
 };
 const gateBoundaryCorrectColor = 0x4cff88;
 const gateBoundaryWrongColor = 0xff4b65;
+const builderGateSelectionPadding = 4;
 
 function updateGatePassBoundaryDirection(gate) {
   const boundary = gate.userData.gatePassBoundary;
@@ -2822,7 +3138,7 @@ function updateGatePassBoundaryDirection(gate) {
       const positiveZFace = object.userData.gateBoundaryFace === 'front';
       const correctSide = positiveZFace === positiveNormalIsCorrect;
       object.material.color.setHex(correctSide ? gateBoundaryCorrectColor : gateBoundaryWrongColor);
-      object.material.opacity = direction === 0 ? 0 : 0.22;
+      object.material.opacity = direction === 0 ? 0 : 0.3;
     } else if (object.userData.isGatePassBoundaryOutline) {
       object.visible = direction !== 0;
     }
@@ -2880,6 +3196,26 @@ function createGatePassBoundary(gate, data) {
       faceMesh.userData.isGatePassBoundarySurface = true;
       boundary.add(faceMesh);
     }
+    const selectionGeometry = opening.circle
+      ? new THREE.CircleGeometry(opening.width / 2 + builderGateSelectionPadding / 2, 48)
+      : new THREE.PlaneGeometry(
+        opening.width + builderGateSelectionPadding,
+        opening.height + builderGateSelectionPadding,
+      );
+    const selectionSurface = new THREE.Mesh(selectionGeometry, new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      colorWrite: false,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    }));
+    selectionSurface.position.set(opening.centerX || 0, opening.centerY, opening.z);
+    selectionSurface.rotation.set(opening.rotationX || 0, opening.rotationY || 0, 0);
+    selectionSurface.renderOrder = 7;
+    selectionSurface.userData.gateBoundaryIndex = openingIndex;
+    selectionSurface.userData.isGatePassBoundarySurface = true;
+    boundary.add(selectionSurface);
     const outline = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry),
       new THREE.LineBasicMaterial({ color: 0x9cefff, transparent: true, opacity: 0.8, depthTest: false }),
@@ -2906,7 +3242,7 @@ function createProceduralGate(type, hue = 'cyan') {
     roughness: 0.35,
     metalness: 0.16,
     emissive: accent,
-    emissiveIntensity: gateGlowIntensityForColor(accent, 0.8),
+    emissiveIntensity: gateGlowIntensityForColor(accent, 0.8 * (gateTypes[type]?.glowMultiplier ?? 1)),
     toneMapped: false,
   });
   const ring = (parent, radius, position, rotation = [0, 0, 0], material = led) => {
@@ -3460,7 +3796,9 @@ function createBuilderPropModel(type) {
   } else if (type === 'podium') {
     group.add(createRedRacePodium(getBuilderRacePodiumLabelMaterial()));
   } else if (type === 'relay-podium-gate') {
-    group.add(createRedRacePodium(getBuilderRacePodiumLabelMaterial()));
+    const podium = createRedRacePodium(getBuilderRacePodiumLabelMaterial());
+    podium.position.z = RELAY_PODIUM_STAGE_FORWARD_OFFSET;
+    group.add(podium);
     const neon = new THREE.MeshStandardMaterial({
       color: 0x45dfff,
       emissive: 0x45dfff,
@@ -3564,6 +3902,100 @@ function createBuilderPropModel(type) {
   return group;
 }
 
+function createRelayPodiumGateIndicators(propObject) {
+  const indicator = new THREE.Group();
+  indicator.name = 'Builder relay gate entrance indicator';
+  indicator.userData.isRelayPodiumGateIndicator = true;
+  indicator.userData.showInBuilder = false;
+  indicator.visible = false;
+
+  const openingWidth = 18.4;
+  const openingHeight = 11.35;
+  const openingCenterY = 9.075;
+  const panelGeometry = new THREE.PlaneGeometry(openingWidth, openingHeight);
+  const frontPanel = new THREE.Mesh(panelGeometry, new THREE.MeshBasicMaterial({
+    color: gateBoundaryCorrectColor,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  }));
+  frontPanel.position.set(0, openingCenterY, 0.17);
+  frontPanel.renderOrder = 8;
+  frontPanel.userData.isRelayPodiumGateIndicatorGeometry = true;
+  indicator.add(frontPanel);
+
+  const backPanel = new THREE.Mesh(panelGeometry.clone(), new THREE.MeshBasicMaterial({
+    color: gateBoundaryWrongColor,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  }));
+  backPanel.position.set(0, openingCenterY, -0.17);
+  backPanel.rotation.y = Math.PI;
+  backPanel.renderOrder = 8;
+  backPanel.userData.isRelayPodiumGateIndicatorGeometry = true;
+  indicator.add(backPanel);
+
+  const badges = [];
+  for (const [side, z, rotationY] of [['front', 0.22, 0], ['back', -0.22, Math.PI]]) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 280;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const badge = new THREE.Mesh(new THREE.PlaneGeometry(10.4, 5.2), new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    }));
+    badge.position.set(0, openingCenterY, z);
+    badge.rotation.y = rotationY;
+    badge.renderOrder = 10;
+    badge.userData.isRelayPodiumGateNumberBadge = true;
+    badge.userData.badgeCanvas = canvas;
+    badge.userData.badgeSide = side;
+    drawRelayPodiumGateNumberBadge(badge, '01', side === 'front');
+    badge.userData.displayLabel = '01';
+    badge.userData.isEntrySide = side === 'front';
+    badges.push(badge);
+    indicator.add(badge);
+  }
+  indicator.userData.frontPanel = frontPanel;
+  indicator.userData.backPanel = backPanel;
+  indicator.userData.numberBadges = badges;
+  propObject.userData.relayPodiumGateIndicator = indicator;
+  propObject.add(indicator);
+}
+
+function drawRelayPodiumGateNumberBadge(badge, label, isEntrySide) {
+  const context = badge.userData.badgeCanvas.getContext('2d');
+  if (!context) return;
+  const accent = isEntrySide ? '#4cff88' : '#ff4b65';
+  context.clearRect(0, 0, 512, 280);
+  context.fillStyle = isEntrySide ? 'rgba(9, 39, 29, 0.9)' : 'rgba(44, 14, 22, 0.9)';
+  context.strokeStyle = accent;
+  context.lineWidth = 8;
+  context.beginPath();
+  context.roundRect(12, 12, 488, 256, 30);
+  context.fill();
+  context.stroke();
+  context.fillStyle = isEntrySide ? '#caffdd' : '#ffd4da';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = `800 ${label === 'S / F' ? 112 : 142}px system-ui, sans-serif`;
+  context.fillText(label, 256, 126);
+  context.fillStyle = accent;
+  context.font = '800 40px system-ui, sans-serif';
+  context.fillText(isEntrySide ? 'ENTRY' : 'EXIT', 256, 222);
+  badge.material.map.needsUpdate = true;
+}
+
 function createBuilderPropObject(data, parent = builderPropRoot) {
   const object = new THREE.Group();
   object.userData.isBuilderProp = true;
@@ -3582,6 +4014,7 @@ function createBuilderPropObject(data, parent = builderPropRoot) {
     data.scaleZ ?? data.scale ?? 1,
   );
   object.add(createBuilderPropModel(data.type));
+  if (data.type === 'relay-podium-gate') createRelayPodiumGateIndicators(object);
   parent.add(object);
   return object;
 }
@@ -3591,6 +4024,11 @@ function clearCommunityTrackProps() {
     communityPropRoot.remove(object);
     object.traverse((node) => {
       if (node.userData.ownedBuilderGeometry) node.geometry?.dispose();
+      if (node.userData.isRelayPodiumGateIndicatorGeometry || node.userData.isRelayPodiumGateNumberBadge) {
+        node.geometry?.dispose();
+        if (node.userData.isRelayPodiumGateNumberBadge) node.material.map?.dispose();
+        node.material?.dispose();
+      }
     });
   }
 }
@@ -3747,6 +4185,7 @@ function loadGateModel(type) {
         normalized.scale.setScalar(modelScale);
         normalized.add(gltf.scene);
         normalized.userData.importedGate = true;
+        normalized.userData.gateType = type;
         normalized.traverse((node) => {
           if (!node.isMesh) return;
           node.material = new THREE.MeshStandardMaterial({
@@ -3779,8 +4218,59 @@ function cloneGateModel(source) {
   return model;
 }
 
+function createGateModelStatusSign(type, label = 'LOADING GATE MODEL') {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    toneMapped: false,
+  }));
+  const openings = gatePassBoundaryOpenings[type] || [];
+  const top = openings.reduce((maxY, opening) => Math.max(maxY, opening.centerY + opening.height / 2), 7.3);
+  sign.position.set(0, top + 1.2, 0);
+  sign.scale.set(7.4, 1.85, 1);
+  sign.renderOrder = 11;
+  sign.userData.isGateModelStatusSign = true;
+  sign.userData.statusCanvas = canvas;
+  setGateModelStatusSignText(sign, label);
+  return sign;
+}
+
+function setGateModelStatusSignText(sign, label) {
+  const canvas = sign?.userData.statusCanvas;
+  const context = canvas?.getContext('2d');
+  if (!context) return;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = label === 'GATE MODEL UNAVAILABLE' ? 'rgba(45, 16, 27, 0.94)' : 'rgba(5, 20, 31, 0.94)';
+  context.strokeStyle = label === 'GATE MODEL UNAVAILABLE' ? '#ff728b' : '#65eaff';
+  context.lineWidth = 6;
+  context.beginPath();
+  context.roundRect(7, 7, canvas.width - 14, canvas.height - 14, 25);
+  context.fill();
+  context.stroke();
+  context.fillStyle = label === 'GATE MODEL UNAVAILABLE' ? '#ffd2da' : '#dffbff';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = '800 31px system-ui, sans-serif';
+  context.fillText(label, canvas.width / 2, canvas.height / 2);
+  sign.material.map.needsUpdate = true;
+}
+
+function disposeGateModelStatusSign(sign) {
+  if (!sign) return;
+  sign.parent?.remove(sign);
+  sign.material.map?.dispose();
+  sign.material.dispose();
+}
+
 function applyGateLedColor(group, hue = 'cyan') {
   const color = new THREE.Color(colors[hue] ?? colors.cyan);
+  const baseIntensity = importedNeonGateEmissiveIntensity * (gateTypes[group.userData.gateType]?.glowMultiplier ?? 1);
   group.traverse((node) => {
     if (!node.isMesh || !node.userData.isGateLed) return;
     const materials = Array.isArray(node.material) ? node.material : [node.material];
@@ -3788,14 +4278,25 @@ function applyGateLedColor(group, hue = 'cyan') {
       if (!material?.color) return;
       material.color.copy(color);
       material.emissive?.copy(color);
-      material.emissiveIntensity = gateGlowIntensityForColor(color, importedNeonGateEmissiveIntensity);
+      material.emissiveIntensity = gateGlowIntensityForColor(color, baseIntensity);
     });
   });
 }
 
+function builderGateRouteOpeningCount(gate) {
+  const type = typeof gate === 'string' ? gate : gate?.type;
+  return gatePassBoundaryOpenings[type]?.length || 1;
+}
+
+function builderGateOpeningLabel(gate, openingIndex) {
+  if (gate?.type === 'neon-ladder') return openingIndex === 1 ? 'Top opening' : 'Bottom opening';
+  if (gate?.type === 'neon-dive') return `Entrance ${openingIndex + 1}`;
+  return `Opening ${openingIndex + 1}`;
+}
+
 function builderGateRouteSlots() {
   return builderGates.flatMap((gate) => {
-    const openingCount = gate.type === 'neon-dive' ? gatePassBoundaryOpenings['neon-dive'].length : 1;
+    const openingCount = builderGateRouteOpeningCount(gate);
     if (openingCount > 1 && (!Array.isArray(gate.entryRouteOrders) || gate.entryRouteOrders.length !== openingCount)) {
       const baseOrder = Number(gate.routeOrder) || 0;
       gate.entryRouteOrders = Array.from({ length: openingCount }, (_, openingIndex) => {
@@ -3841,7 +4342,7 @@ function setBuilderGateRouteSlotOrder(slot, routeOrder) {
 }
 
 function updateBuilderGateBadge(gate, data) {
-  if (data.type === 'neon-dive') builderGateRouteSlots();
+  if (builderGateRouteOpeningCount(data) > 1) builderGateRouteSlots();
   const previousBadges = gate.userData.gateNumberBadges
     || (gate.userData.gateNumberBadge ? [gate.userData.gateNumberBadge] : []);
   previousBadges.forEach((previous) => {
@@ -3850,51 +4351,52 @@ function updateBuilderGateBadge(gate, data) {
     previous.material.map?.dispose();
     previous.material.dispose();
   });
-  const flagGate = gate.userData.gateType === 'neon-flag';
-  const hurdleGate = gate.userData.gateType === 'neon-hurdle';
-  const multipleEntranceGate = ['neon-ladder', 'neon-dive'].includes(gate.userData.gateType);
-  const flagOpening = gate.userData.passBoundaryOpenings?.[0];
-  const badgePositions = multipleEntranceGate
-    ? gate.userData.passBoundaryOpenings.map(({ centerX = 0, centerY, z }, openingIndex) => ({ x: centerX, y: centerY, z, openingIndex }))
-    : [{ x: flagGate ? flagOpening?.centerX || 0 : 0, y: flagGate || hurdleGate ? flagOpening?.centerY || 0 : 7.35, z: 0 }];
-  const badges = badgePositions.map(({ x, y, z }, openingIndex) => {
-    const hasMultipleOpenings = ['neon-ladder', 'neon-dive'].includes(data.type);
+  const openings = gate.userData.passBoundaryOpenings || [{ centerY: 7.35, z: 0 }];
+  const badges = openings.flatMap((opening, openingIndex) => {
+    const { centerX = 0, centerY = 7.35, z = 0, width = 18, height = 14.6, rotationX = 0, rotationY = 0 } = opening;
+    const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
     const routeSlot = builderGateRouteSlots().find((slot) => slot.gate.id === data.id
-      && slot.openingIndex === (data.type === 'neon-dive' ? openingIndex : null));
+      && slot.openingIndex === (hasMultipleOpenings ? openingIndex : null));
     const isStartFinish = routeSlot?.isStartFinish ?? data.isStartFinish === true;
-    const routeOrder = data.type === 'neon-dive'
+    const routeOrder = hasMultipleOpenings
       ? Number(data.entryRouteOrders?.[openingIndex]) || 0
       : Number.isSafeInteger(data.routeOrder) ? data.routeOrder : 0;
-    const canvas = document.createElement('canvas');
-    canvas.width = 192;
-    canvas.height = 96;
-    const context = canvas.getContext('2d');
-    if (!context) return null;
     const label = isStartFinish ? 'S / F' : routeOrder === 0 ? 'N/A' : String(routeOrder).padStart(2, '0');
-    context.fillStyle = isStartFinish ? '#143328' : '#0b1a28';
-    context.strokeStyle = isStartFinish ? '#71f1bf' : '#6ee7ff';
-    context.lineWidth = 6;
-    context.beginPath();
-    context.roundRect(6, 6, 180, 84, 20);
-    context.fill();
-    context.stroke();
-    context.fillStyle = isStartFinish ? '#a7ffda' : '#eafaff';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.font = `800 ${isStartFinish ? 42 : 50}px system-ui, sans-serif`;
-    context.fillText(label, 96, 48);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const badge = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }));
-    badge.scale.set(flagGate ? 3.2 : hasMultipleOpenings ? 2.6 : isStartFinish ? 2.8 : 2.2, flagGate ? 1.6 : hasMultipleOpenings ? 1.3 : 1.1, 1);
-    badge.position.set(x, y, z);
-    badge.renderOrder = 10;
-    badge.userData.isBuilderGateBadge = true;
-    badge.userData.gateBadgeOpeningIndex = openingIndex;
-    badge.visible = currentPage === 'builder' && !flying;
-    gate.add(badge);
-    return badge;
-  }).filter(Boolean);
+    const direction = data.entryDirections?.[openingIndex] ?? data.entryDirection ?? 1;
+    const baseRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotationX, rotationY, 0));
+    const planeNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(baseRotation);
+    const badgeWidth = Math.min(10.4, width * 0.72);
+    const badgeHeight = Math.min(5.2, height * 0.64);
+    return [['front', 1], ['back', -1]].map(([side, sideDirection]) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 280;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const badge = new THREE.Mesh(new THREE.PlaneGeometry(badgeWidth, badgeHeight), new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+      }));
+      const isEntrySide = direction !== 0 && (sideDirection > 0 ? direction === 1 : direction === -1);
+      badge.userData.badgeCanvas = canvas;
+      drawRelayPodiumGateNumberBadge(badge, direction === 0 ? 'N/A' : label, isEntrySide);
+      badge.position.set(centerX, centerY, z).addScaledVector(planeNormal, sideDirection * 0.24);
+      badge.quaternion.copy(baseRotation);
+      if (sideDirection < 0) badge.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+      badge.renderOrder = 10;
+      badge.userData.isBuilderGateBadge = true;
+      badge.userData.gateBadgeOpeningIndex = openingIndex;
+      badge.userData.badgeSide = side;
+      badge.userData.displayLabel = direction === 0 ? 'N/A' : label;
+      badge.userData.isEntrySide = isEntrySide;
+      badge.visible = currentPage === 'builder' && !flying && direction !== 0;
+      gate.add(badge);
+      return badge;
+    });
+  });
   gate.userData.gateNumberBadges = badges;
   gate.userData.gateNumberBadge = badges[0] || null;
   updateBuilderGateBadgeVisibility(gate);
@@ -3904,7 +4406,25 @@ function updateBuilderGateBadgeVisibility(gate) {
   const data = gate.userData.gateData;
   const badges = gate.userData.gateNumberBadges || [];
   badges.forEach((badge, index) => {
-    const direction = data?.entryDirections?.[index] ?? data?.entryDirection ?? 1;
+    const openingIndex = badge.userData.gateBadgeOpeningIndex ?? index;
+    const direction = data?.entryDirections?.[openingIndex] ?? data?.entryDirection ?? 1;
+    const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
+    const routeSlot = builderGateRouteSlots().find((slot) => slot.gate.id === data?.id
+      && slot.openingIndex === (hasMultipleOpenings ? openingIndex : null));
+    const routeOrder = hasMultipleOpenings
+      ? Number(data?.entryRouteOrders?.[openingIndex]) || 0
+      : Number.isSafeInteger(data?.routeOrder) ? data.routeOrder : 0;
+    const isStartFinish = routeSlot?.isStartFinish ?? (data?.isStartFinish === true);
+    const label = isStartFinish
+      ? 'S / F'
+      : routeOrder === 0 ? 'N/A' : String(routeOrder).padStart(2, '0');
+    const displayLabel = direction === 0 ? 'N/A' : label;
+    const isEntrySide = direction !== 0 && (badge.userData.badgeSide === 'front' ? direction === 1 : direction === -1);
+    if (badge.userData.displayLabel !== displayLabel || badge.userData.isEntrySide !== isEntrySide) {
+      drawRelayPodiumGateNumberBadge(badge, displayLabel, isEntrySide);
+      badge.userData.displayLabel = displayLabel;
+      badge.userData.isEntrySide = isEntrySide;
+    }
     badge.visible = currentPage === 'builder' && !flying && direction !== 0;
   });
 }
@@ -3924,21 +4444,21 @@ function createBuilderGate(data) {
   );
   gate.scale.set(data.scaleX ?? data.scale ?? 1, data.scaleY ?? data.scale ?? 1, data.scaleZ ?? data.scale ?? 1);
   gate.visible = currentPage === 'builder';
-  gate.add(createProceduralGate(data.type, data.color));
+  gate.userData.gateModelStatusSign = createGateModelStatusSign(data.type);
+  gate.add(gate.userData.gateModelStatusSign);
   updateBuilderGateBadge(gate, data);
   gateRoot.add(gate);
   loadGateModel(data.type).then((source) => {
-    if (!source || gate.parent !== gateRoot) return;
-    const indicators = gate.userData.flightIndicators || [];
-    indicators.forEach((indicator) => gate.remove(indicator));
-    clearChildren(gate);
+    if (gate.parent !== gateRoot) return;
+    if (!source) {
+      setGateModelStatusSignText(gate.userData.gateModelStatusSign, 'GATE MODEL UNAVAILABLE');
+      return;
+    }
+    disposeGateModelStatusSign(gate.userData.gateModelStatusSign);
+    gate.userData.gateModelStatusSign = null;
     const model = cloneGateModel(source);
     applyGateLedColor(model, data.color);
     gate.add(model);
-    createGatePassBoundary(gate, data);
-    indicators.forEach((indicator) => gate.add(indicator));
-    if (indicators.length) gate.userData.flightIndicators = indicators;
-    updateBuilderGateBadge(gate, data);
     gate.userData.loadedModel = true;
   });
   return gate;
@@ -4199,6 +4719,7 @@ let activeTrack = null;
 let trackGateEntries = [];
 let repeatCourseIndicators = [];
 let routeProgress = 0;
+let flightCourseLapCount = 1;
 let showDroneBaseY = 8.2;
 let environmentState = { time: 14, fogDistance: 560, weather: 'clear', brightness: 1 };
 
@@ -4306,6 +4827,39 @@ function updateTrackPickerPreview() {
   });
 }
 
+function createCommunityTrackFlightGate(data) {
+  const gate = new THREE.Group();
+  gate.userData.isCommunityTrackGate = true;
+  gate.userData.gateId = data.id;
+  gate.userData.gateType = data.type;
+  gate.userData.gateData = data;
+  gate.position.set(data.x, data.y, data.z);
+  gate.rotation.set(
+    THREE.MathUtils.degToRad(data.rotationX || 0),
+    THREE.MathUtils.degToRad(data.rotation || 0),
+    THREE.MathUtils.degToRad(data.rotationZ || 0),
+  );
+  gate.scale.set(data.scaleX ?? data.scale ?? 1, data.scaleY ?? data.scale ?? 1, data.scaleZ ?? data.scale ?? 1);
+  createGatePassBoundary(gate, data);
+
+  const statusSign = createGateModelStatusSign(data.type);
+  gate.add(statusSign);
+  trackRoot.add(gate);
+  loadGateModel(data.type).then((source) => {
+    if (gate.parent !== trackRoot) return;
+    if (!source) {
+      setGateModelStatusSignText(statusSign, 'GATE MODEL UNAVAILABLE');
+      return;
+    }
+    disposeGateModelStatusSign(statusSign);
+    const model = cloneGateModel(source);
+    applyGateLedColor(model, data.color);
+    gate.add(model);
+    gate.userData.loadedModel = true;
+  });
+  return gate;
+}
+
 function applyTrackSelection(trackId, persist = true) {
   const tracks = trackCatalog[activeBiome] || [];
   const saved = readStored('aerframe-selected-tracks', {});
@@ -4359,6 +4913,43 @@ function applyTrackSelection(trackId, persist = true) {
   const savedScalesX = Array.isArray(activeTrack.gateScalesX) ? activeTrack.gateScalesX : [];
   const savedScalesY = Array.isArray(activeTrack.gateScalesY) ? activeTrack.gateScalesY : [];
   const savedScalesZ = Array.isArray(activeTrack.gateScalesZ) ? activeTrack.gateScalesZ : [];
+  const savedGateTypes = Array.isArray(activeTrack.gateTypes) ? activeTrack.gateTypes : [];
+  const savedGateColors = Array.isArray(activeTrack.gateColors) ? activeTrack.gateColors : [];
+  const savedGateIds = Array.isArray(activeTrack.gateIds) ? activeTrack.gateIds : [];
+  const savedGateOpeningIndices = Array.isArray(activeTrack.gateOpeningIndices) ? activeTrack.gateOpeningIndices : [];
+  const savedEntryDirections = Array.isArray(activeTrack.gateEntryDirections) ? activeTrack.gateEntryDirections : [];
+  const hasSavedGateModels = activeTrack.id.startsWith('community-')
+    && savedGateTypes.length === expandedPoints.length
+    && savedGateTypes.every((type) => gateTypes[type]?.raceAsset);
+  const communityGateObjects = new Map();
+
+  const communityGateKey = (pointIndex) => {
+    const id = savedGateIds.length === expandedPoints.length ? savedGateIds[pointIndex] : '';
+    return id ? `${savedGateTypes[pointIndex]}:${id}` : `${savedGateTypes[pointIndex]}:point-${pointIndex}`;
+  };
+  const communityEntryDirections = (pointIndex) => {
+    const type = savedGateTypes[pointIndex];
+    const openingCount = gatePassBoundaryOpenings[type]?.length || 1;
+    const entryDirections = Array(openingCount).fill(1);
+    const id = savedGateIds.length === expandedPoints.length ? savedGateIds[pointIndex] : null;
+    for (let index = 0; index < expandedPoints.length; index += 1) {
+      const sameGate = id ? savedGateIds[index] === id : index === pointIndex;
+      if (!sameGate || savedGateTypes[index] !== type) continue;
+      const openingIndex = Number(savedGateOpeningIndices[index] ?? -1);
+      const rawDirections = savedEntryDirections[index];
+      const values = Array.isArray(rawDirections) ? rawDirections : [rawDirections];
+      const normalizeDirection = (direction) => direction === 0 ? 0 : direction === -1 ? -1 : 1;
+      if (openingIndex >= 0 && openingIndex < openingCount) {
+        entryDirections[openingIndex] = normalizeDirection(values[0]);
+      } else if (values.length === openingCount) {
+        values.forEach((direction, directionIndex) => { entryDirections[directionIndex] = normalizeDirection(direction); });
+      } else if (openingCount === 1 && values.length) {
+        entryDirections[0] = normalizeDirection(values[0]);
+      }
+    }
+    return entryDirections;
+  };
+
   trackGateEntries = routePointIndices.map((pointIndex, routeIndex) => {
     const point = expandedPoints[pointIndex];
     const isStartFinish = routeIndex === 0;
@@ -4373,27 +4964,75 @@ function applyTrackSelection(trackId, persist = true) {
     const hasSavedRotation = Number.isFinite(Number(savedRotations[pointIndex]));
     const yaw = hasSavedRotation ? THREE.MathUtils.degToRad(Number(savedRotations[pointIndex])) : Math.atan2(towardPrevious.x, towardPrevious.z);
     const hue = isStartFinish ? 'orange' : biomes[activeBiome].colors[routeIndex % biomes[activeBiome].colors.length];
-    const gate = addGate(point[0], point[1], point[2], hue, 2.35, yaw, false, trackRoot);
-    gate.rotation.x = THREE.MathUtils.degToRad(Number(savedRotationsX[pointIndex]) || 0);
-    gate.rotation.z = THREE.MathUtils.degToRad(Number(savedRotationsZ[pointIndex]) || 0);
-    const savedEntryDirections = Array.isArray(activeTrack.gateEntryDirections) ? activeTrack.gateEntryDirections : [];
+    const savedGateType = hasSavedGateModels ? savedGateTypes[pointIndex] : null;
+    const savedOpeningIndex = Number(savedGateOpeningIndices[pointIndex] ?? -1);
+    let gate;
+    if (savedGateType) {
+      const key = communityGateKey(pointIndex);
+      gate = communityGateObjects.get(key);
+      if (!gate) {
+        const scaleValue = (axisValues, axisIndex) => {
+          const value = Number(axisValues[axisIndex] ?? savedScales[axisIndex] ?? 1);
+          return THREE.MathUtils.clamp(Number.isFinite(value) ? value : 1, 0.5, 2);
+        };
+        const gateData = {
+          id: savedGateIds.length === expandedPoints.length ? savedGateIds[pointIndex] : `community-gate-${pointIndex}`,
+          type: savedGateType,
+          x: point[0],
+          y: point[1] - builderGateFlightCenterY,
+          z: point[2],
+          rotation: hasSavedRotation ? Number(savedRotations[pointIndex]) : THREE.MathUtils.radToDeg(yaw),
+          rotationX: Number(savedRotationsX[pointIndex]) || 0,
+          rotationZ: Number(savedRotationsZ[pointIndex]) || 0,
+          scale: THREE.MathUtils.clamp(Number(savedScales[pointIndex]) || 1, 0.5, 2),
+          scaleX: scaleValue(savedScalesX, pointIndex),
+          scaleY: scaleValue(savedScalesY, pointIndex),
+          scaleZ: scaleValue(savedScalesZ, pointIndex),
+          color: savedGateColors[pointIndex] || hue,
+          entryDirections: communityEntryDirections(pointIndex),
+        };
+        gateData.entryDirection = gateData.entryDirections[0] ?? 1;
+        gate = createCommunityTrackFlightGate(gateData);
+        communityGateObjects.set(key, gate);
+      }
+    } else {
+      gate = addGate(point[0], point[1], point[2], hue, 2.35, yaw, false, trackRoot);
+      gate.rotation.x = THREE.MathUtils.degToRad(Number(savedRotationsX[pointIndex]) || 0);
+      gate.rotation.z = THREE.MathUtils.degToRad(Number(savedRotationsZ[pointIndex]) || 0);
+    }
     const directions = savedEntryDirections[pointIndex];
     const entryDirections = Array.isArray(directions)
       ? directions.map((direction) => direction === 0 ? 0 : direction === -1 ? -1 : 1)
       : [directions === 0 ? 0 : directions === -1 ? -1 : 1];
-    gate.userData.gateData = { entryDirections, entryDirection: entryDirections[0] };
-    gate.scale.set(
-      THREE.MathUtils.clamp(Number(savedScalesX[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
-      THREE.MathUtils.clamp(Number(savedScalesY[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
-      THREE.MathUtils.clamp(Number(savedScalesZ[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
-    );
+    if (!savedGateType) {
+      gate.userData.gateData = { entryDirections, entryDirection: entryDirections[0] };
+      gate.scale.set(
+        THREE.MathUtils.clamp(Number(savedScalesX[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
+        THREE.MathUtils.clamp(Number(savedScalesY[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
+        THREE.MathUtils.clamp(Number(savedScalesZ[pointIndex] ?? savedScales[pointIndex]) || 1, 0.5, 2),
+      );
+    }
     const indicator = createGateIndicator(gate);
+    if (savedGateType) {
+      const requestedOpeningIndex = savedOpeningIndex >= 0 ? savedOpeningIndex : 0;
+      const plane = gate.userData.gatePassPlanes?.[requestedOpeningIndex] || gate.userData.gatePassPlanes?.[0];
+      if (plane) {
+        indicator.position.copy(plane.point);
+        indicator.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), plane.normal);
+      } else {
+        indicator.position.y = builderGateFlightCenterY;
+      }
+    }
     const routeNumber = isStartFinish ? 0 : routeIndex;
-    updateBuilderGateBadge(gate, { isStartFinish, routeOrder: routeNumber });
+    if (!savedGateType) updateBuilderGateBadge(gate, { isStartFinish, routeOrder: routeNumber });
     const role = isStartFinish ? 'START / FINISH' : `GATE ${routeNumber}`;
-    gate.userData.trackGateIndex = routeIndex;
-    gate.userData.trackGateRole = role;
-    return makeFlightGateEntry(gate, role, 2.05, indicator, 0, routeNumber, isStartFinish);
+    if (!gate.userData.isCommunityTrackGate) {
+      gate.userData.trackGateIndex = routeIndex;
+      gate.userData.trackGateRole = role;
+    }
+    const entry = makeFlightGateEntry(gate, role, 2.05, indicator, 0, routeNumber, isStartFinish);
+    entry.planeIndex = savedGateType && savedOpeningIndex >= 0 ? savedOpeningIndex : null;
+    return entry;
   });
   trackRoot.visible = flying || currentPage === 'trackPicker';
   if (currentPage === 'trackPicker') setTrackOverviewCamera();
@@ -6858,7 +7497,9 @@ function clearChildren(group) {
     group.remove(child);
     child.traverse?.((object) => {
       if (object.geometry && object.geometry !== boxGeometry) object.geometry.dispose();
-      if (object.userData.isBuilderGateBadge) object.material.map?.dispose();
+      if (object.userData.isBuilderGateBadge
+        || object.userData.isGateModelStatusSign
+        || object.userData.isRelayPodiumGateNumberBadge) object.material.map?.dispose();
       if (object.material && !Object.values(sharedMaterials).includes(object.material)) {
         (Array.isArray(object.material) ? object.material : [object.material]).forEach((material) => material.dispose());
       }
@@ -7209,11 +7850,20 @@ const panels = [...document.querySelectorAll('[data-panel]')];
 const navButtons = [...document.querySelectorAll('.page-nav-button')];
 const settingsTabs = [...document.querySelectorAll('[data-settings-tab]')];
 const settingsPanels = [...document.querySelectorAll('[data-settings-content]')];
+const flightMainMenuButton = document.querySelector('#flightMainMenuButton');
 const hud = document.querySelector('#flightHud');
 const toast = document.querySelector('#toast');
 const authModal = document.querySelector('#authModal');
 let signedInUser = null;
 let partyLobby = null;
+let gameChatChannel = 'world';
+let gameChatCache = { lobby: [], world: [] };
+let gameChatLobbyCode = '';
+let gameChatUserId = null;
+let gameChatSending = false;
+let gameChatRequestPending = false;
+let gameChatStatusMessage = '';
+let gameChatStatusIsError = false;
 let lastSettledRaceProgressKey = '';
 const multiplayerModes = {
   'competitive-4v4': 'Tournament',
@@ -7314,16 +7964,23 @@ function syncGateBadgeVisibility() {
       object.visible = visible && direction !== 0;
     }
     if (object.userData.isBuilderGateBoundary) object.visible = visible;
+    if (object.userData.isRelayPodiumGateIndicator) {
+      object.visible = visible && object.userData.showInBuilder === true;
+    }
   });
 }
 let hudEnabled = storedSettings.hudEnabled !== false;
+let reticleEnabled = storedSettings.reticleEnabled !== false;
+let gameChatEnabled = storedSettings.gameChatEnabled !== false;
 let vignetteEnabled = storedSettings.vignetteEnabled !== false;
 let quality = Number(storedSettings.quality) || 1.8;
-let cameraAngle = Number(storedSettings.cameraAngle) || 22;
+let cameraAngle = THREE.MathUtils.clamp(Number(storedSettings.cameraAngle) || 22, 5, 60);
 let soundEnabled = storedSettings.soundEnabled === true;
+let lobbyMusicEnabled = storedSettings.lobbyMusicEnabled !== false;
 const storedAudioVolume = Number(storedSettings.audioVolume);
 let audioVolume = Number.isFinite(storedAudioVolume) ? THREE.MathUtils.clamp(storedAudioVolume, 0, 1) : 1;
 let audioContext = null;
+let lobbyMusicRun = null;
 let motorVoices = [];
 let motorGain = null;
 let motorLowpass = null;
@@ -7406,6 +8063,7 @@ function builderTrackRequirementsMessage() {
 }
 
 let partyPollTimer = 0;
+let gameChatPollTimer = 0;
 let competitiveBannerPollTimer = 0;
 let competitiveBannerCycleTimer = 0;
 let teamPollTimer = 0;
@@ -7477,6 +8135,7 @@ function syncWorldMode() {
   trackRoot.visible = currentPage === 'trackPicker' || (!menuScene && currentPage !== 'builder');
   communityPropRoot.visible = currentPage === 'trackPicker' || (!menuScene && currentPage !== 'builder');
   builderPropRoot.visible = currentPage === 'builder';
+  builderRaceLineRoot.visible = currentPage === 'builder' && !flying && builderRaceLineGenerated;
   builderGhostRoot.visible = currentPage === 'builder' && !flying && gatePlacementArmed;
   biomeLightRoot.visible = false;
   menuBackdropRoot.visible = menuSetVisible || platformOnlyScene;
@@ -7493,6 +8152,8 @@ function syncWorldMode() {
   fieldSpot.visible = false;
   bloomPass.strength = menuScene ? 0.26 : 0.42;
   updateWorldLightBalance();
+  updateGameChatUI();
+  syncLobbyMusic();
 }
 
 function readStored(key, fallback) {
@@ -8220,11 +8881,14 @@ function saveSettings() {
       cameraAngle,
       quality,
       hudEnabled,
+      reticleEnabled,
+      gameChatEnabled,
       vignetteEnabled,
       droneNeonColor,
       droneBodyColor,
       dronePropColor,
       soundEnabled,
+      lobbyMusicEnabled,
       audioVolume,
       flightTune,
     }));
@@ -8277,6 +8941,7 @@ function updateAccountUI() {
     badgeName.textContent = 'GUEST PILOT';
     badgeInitial.textContent = '•';
   }
+  updateGameChatUI();
 }
 
 async function authRequest(endpoint, payload) {
@@ -8324,6 +8989,145 @@ async function lobbyRequest(endpoint, payload = {}) {
   if (!response.ok) throw new Error(result.error || 'Could not update the flight party.');
   return result;
 }
+
+function renderGameChatMessages() {
+  const host = document.querySelector('#gameChatMessages');
+  if (!host) return;
+  host.replaceChildren();
+  const messages = gameChatCache[gameChatChannel] || [];
+  if (!messages.length) {
+    const empty = document.createElement('p');
+    empty.className = 'game-chat-empty';
+    empty.textContent = 'NO MESSAGES YET';
+    host.append(empty);
+  }
+  for (const message of messages) {
+    const row = document.createElement('article');
+    row.className = `game-chat-message${message.userId === signedInUser?.id ? ' is-local' : ''}`;
+    const heading = document.createElement('div');
+    heading.className = 'game-chat-message-heading';
+    const name = document.createElement('strong');
+    name.textContent = message.username || 'PILOT';
+    const time = document.createElement('time');
+    const timestamp = Number(message.createdAt);
+    if (Number.isFinite(timestamp)) {
+      time.dateTime = new Date(timestamp).toISOString();
+      time.textContent = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    heading.append(name, time);
+    const text = document.createElement('p');
+    text.textContent = message.text || '';
+    row.append(heading, text);
+    host.append(row);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+function setGameChatStatus(message = '', isError = false) {
+  gameChatStatusMessage = message;
+  gameChatStatusIsError = isError;
+  const status = document.querySelector('#gameChatStatus');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('is-error', isError);
+}
+
+function updateGameChatUI() {
+  const panel = document.querySelector('#gameChat');
+  if (!panel) return;
+  const nextUserId = signedInUser?.id || null;
+  if (gameChatUserId !== nextUserId) {
+    gameChatUserId = nextUserId;
+    gameChatCache = { lobby: [], world: [] };
+    setGameChatStatus('');
+    renderGameChatMessages();
+  }
+  const nextLobbyCode = partyLobby?.code || '';
+  if (gameChatLobbyCode !== nextLobbyCode) {
+    gameChatLobbyCode = nextLobbyCode;
+    gameChatCache.lobby = [];
+    setGameChatStatus('');
+    renderGameChatMessages();
+  }
+  if (!partyLobby && gameChatChannel === 'lobby') {
+    gameChatChannel = 'world';
+    setGameChatStatus('');
+    renderGameChatMessages();
+  }
+
+  panel.hidden = !gameChatEnabled || !flying;
+  const lobbyTab = document.querySelector('#gameChatLobbyTab');
+  const worldTab = document.querySelector('#gameChatWorldTab');
+  const title = document.querySelector('#gameChatChannelTitle');
+  const input = document.querySelector('#gameChatInput');
+  const send = document.querySelector('#gameChatSend');
+  const canSend = Boolean(signedInUser && (gameChatChannel === 'world' || partyLobby));
+  lobbyTab.disabled = !partyLobby;
+  lobbyTab.setAttribute('aria-pressed', String(gameChatChannel === 'lobby'));
+  worldTab.setAttribute('aria-pressed', String(gameChatChannel === 'world'));
+  title.textContent = `${gameChatChannel.toUpperCase()} CHAT`;
+  input.disabled = !canSend || gameChatSending;
+  input.placeholder = !signedInUser ? 'Sign in to chat…' : gameChatChannel === 'lobby' && !partyLobby ? 'Join a lobby to chat…' : 'Message pilots…';
+  send.disabled = !canSend || gameChatSending;
+  if (!signedInUser) setGameChatStatus('Sign in to send and read chat messages.');
+  else if (gameChatChannel === 'lobby' && !partyLobby) setGameChatStatus('Join a lobby to use lobby chat.');
+  else setGameChatStatus(gameChatStatusMessage, gameChatStatusIsError);
+}
+
+function setGameChatChannel(channel) {
+  if (!['lobby', 'world'].includes(channel) || (channel === 'lobby' && !partyLobby)) return;
+  if (channel === gameChatChannel) return;
+  gameChatChannel = channel;
+  setGameChatStatus('');
+  renderGameChatMessages();
+  updateGameChatUI();
+  void refreshGameChat();
+}
+
+async function refreshGameChat() {
+  if (!gameChatEnabled || !flying || !signedInUser?.id || gameChatRequestPending) return;
+  const channel = gameChatChannel;
+  const userId = signedInUser.id;
+  const lobbyCode = partyLobby?.code || '';
+  if (channel === 'lobby' && !lobbyCode) return;
+  gameChatRequestPending = true;
+  try {
+    const result = await lobbyRequest(`chat?channel=${channel}`, null);
+    if (gameChatChannel !== channel || signedInUser?.id !== userId || (channel === 'lobby' && partyLobby?.code !== lobbyCode)) return;
+    gameChatCache[channel] = Array.isArray(result.messages) ? result.messages.slice(-80) : [];
+    setGameChatStatus('');
+    renderGameChatMessages();
+    updateGameChatUI();
+  } catch (error) {
+    if (gameChatChannel === channel && signedInUser?.id === userId) setGameChatStatus(error.message, true);
+  } finally {
+    gameChatRequestPending = false;
+  }
+}
+
+document.querySelector('#gameChatLobbyTab').addEventListener('click', () => setGameChatChannel('lobby'));
+document.querySelector('#gameChatWorldTab').addEventListener('click', () => setGameChatChannel('world'));
+document.querySelector('#gameChatForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.querySelector('#gameChatInput');
+  const text = input.value.trim();
+  if (!text || !signedInUser?.id || (gameChatChannel === 'lobby' && !partyLobby) || gameChatSending) return;
+  gameChatSending = true;
+  updateGameChatUI();
+  try {
+    const result = await lobbyRequest('chat', { channel: gameChatChannel, text });
+    gameChatCache[gameChatChannel] = [...(gameChatCache[gameChatChannel] || []), result.message].slice(-80);
+    input.value = '';
+    setGameChatStatus('');
+    renderGameChatMessages();
+  } catch (error) {
+    setGameChatStatus(error.message, true);
+  } finally {
+    gameChatSending = false;
+    updateGameChatUI();
+    input.focus();
+  }
+});
 
 async function friendsRequest(endpoint = '', payload = null) {
   let response;
@@ -8714,9 +9518,14 @@ function syncMenuChoiceAvailability() {
   });
 }
 
+function minimumOnlineRacePlayers(lobby) {
+  return lobby?.gameMode === 'relay-race' ? 8 : 2;
+}
+
 function updatePartyUI(lobby = partyLobby) {
   partyLobby = lobby || null;
   syncMenuChoiceAvailability();
+  updateFlightMainMenuButton();
   rememberRecentPartyPilots(partyLobby);
   if (!partyLobby || partyLobby.status !== 'open' || !partyLobby.results?.length) {
     lastSettledRaceProgressKey = '';
@@ -8739,7 +9548,7 @@ function updatePartyUI(lobby = partyLobby) {
     : [{ id: signedInUser?.id || 'guest', username: signedInUser?.username || signedInUser?.email?.split('@')[0] || 'GUEST PILOT', isHost: true, isLocal: true, online: true }];
   const controlPanel = document.querySelector('#partyControlPanel');
   controlPanel.hidden = !partyLobby;
-  const capacity = Math.max(1, Math.min(8, Number(partyLobby?.maxPlayers) || 8));
+  const capacity = Math.max(2, Math.min(8, Number(partyLobby?.maxPlayers) || 8));
   document.querySelector('#partyCount').textContent = `${members.length} / ${capacity}`;
   const state = document.querySelector('#partyState');
   const stateLabel = !partyLobby ? (signedInUser ? 'SOLO' : 'GUEST')
@@ -8750,9 +9559,10 @@ function updatePartyUI(lobby = partyLobby) {
   state.querySelector('span').textContent = stateLabel;
   if (flying && partyRacePhase === 'waiting' && partyLobby) {
     const loadedCount = partyLobby.members.filter((member) => member.ready).length;
+    const minimumPlayers = minimumOnlineRacePlayers(partyLobby);
     document.querySelector('#flightPrompt').textContent = partyLobby.status === 'starting'
-      ? `LOBBY FULL / FREE FLY UNTIL GRID IN ${Math.max(1, Math.ceil((partyLobby.startAt - Date.now()) / 1000))}`
-      : `FREE FLIGHT / ${loadedCount} OF ${capacity} PILOTS LOADED`;
+      ? `RACE GRID IN ${Math.max(1, Math.ceil((partyLobby.startAt - Date.now()) / 1000))}`
+      : `FREE FLIGHT / ${loadedCount} OF ${members.length} READY / MIN ${minimumPlayers}`;
   }
   const roster = document.querySelector('#serverLobbyRoster');
   if (roster) {
@@ -8774,6 +9584,8 @@ function updatePartyUI(lobby = partyLobby) {
   updateRaceStartOverlay();
   updateRaceLeaderboard();
   updateRelayRaceTiming();
+  updateGameChatUI();
+  syncLobbyMusic();
 }
 
 function localRelayTeam() {
@@ -8933,7 +9745,7 @@ function updatePartyLobby(lobby) {
       setPage('singleplayer');
       enterFlight();
       document.querySelector('#flightModeLabel').textContent = 'LOBBY / FREE FLIGHT';
-      document.querySelector('#flightPrompt').textContent = `FREE FLIGHT / ${lobby.members.filter((member) => member.ready).length} OF ${lobby.maxPlayers} PILOTS LOADED`;
+      document.querySelector('#flightPrompt').textContent = `FREE FLIGHT / ${lobby.members.filter((member) => member.ready).length} OF ${lobby.members.length} READY / MIN ${minimumOnlineRacePlayers(lobby)}`;
       updateRaceStartOverlay();
       updateRaceLeaderboard();
     }
@@ -8944,6 +9756,7 @@ function updatePartyLobby(lobby) {
     partyRacePhase = 'lobby';
     setLobbyMessage('');
   }
+  syncLobbyMusic();
 }
 
 function enterPartyWaitingFlight() {
@@ -8953,14 +9766,14 @@ function enterPartyWaitingFlight() {
   setPage('singleplayer');
   enterFlight();
   document.querySelector('#flightModeLabel').textContent = 'LOBBY / FREE FLIGHT';
-  document.querySelector('#flightPrompt').textContent = `FREE FLY WHILE PILOTS LOAD / ${partyLobby.members.length} OF ${partyLobby.maxPlayers}`;
+  document.querySelector('#flightPrompt').textContent = `FREE FLIGHT / ${partyLobby.members.length} PILOTS / MIN ${minimumOnlineRacePlayers(partyLobby)}`;
   updateRaceStartOverlay();
   void lobbyRequest('ready').then((result) => {
     updatePartyLobby(result.lobby);
     const loaded = result.lobby.members.filter((member) => member.ready).length;
     setLobbyMessage(result.lobby.status === 'starting'
-      ? `All ${loaded} pilots are loaded. Free fly for 10 seconds before the race grid.`
-      : `Lobby loading: ${loaded}/${result.lobby.maxPlayers} pilots ready. Free fly while everyone loads in.`);
+      ? `Race starting with ${loaded} pilots. Free fly for 10 seconds before the grid.`
+      : `Lobby loading: ${loaded}/${result.lobby.members.length} connected pilots ready. At least ${minimumOnlineRacePlayers(result.lobby)} are required to start.`);
   }).catch((error) => setLobbyMessage(error.message, true));
 }
 
@@ -8976,9 +9789,9 @@ function updateRaceStartOverlay() {
   let nextDetail = '';
   const now = Date.now();
   if (activeLobby && partyLobby.status === 'starting' && partyLobby.startAt > now) {
-    nextLabel = 'LOBBY FULL / GRID IN';
+    nextLabel = 'RACE GRID IN';
     nextNumber = String(Math.max(1, Math.ceil((partyLobby.startAt - now) / 1000)));
-    nextDetail = `${partyLobby.members.length} PILOTS LOADED / FREE FLIGHT`;
+    nextDetail = `${partyLobby.members.length} PILOTS / FREE FLIGHT`;
   } else if (activeLobby && (partyLobby.status === 'grid' || partyRacePhase === 'grid')) {
     const raceAt = Number(partyLobby.raceAt) || Number(partyLobby.startAt) + 5000;
     if (now < raceAt) {
@@ -9081,6 +9894,7 @@ function stagePartyRaceGrid(raceAt) {
   document.querySelector('#flightPrompt').textContent = `ON THE GRID / RACE STARTS IN ${seconds}`;
   updateRaceStartOverlay();
   updateRaceLeaderboard();
+  syncLobbyMusic();
 }
 
 function beginPartyRace(raceAt) {
@@ -9091,6 +9905,7 @@ function beginPartyRace(raceAt) {
   if (launchPadState) launchPadState.started = false;
   updateRaceStartOverlay();
   updateRaceLeaderboard();
+  syncLobbyMusic();
 }
 
 async function refreshPartyLobby() {
@@ -9106,8 +9921,11 @@ async function refreshPartyLobby() {
 
 function startPartyPolling() {
   window.clearInterval(partyPollTimer);
+  window.clearInterval(gameChatPollTimer);
   void refreshPartyLobby();
+  void refreshGameChat();
   partyPollTimer = window.setInterval(refreshPartyLobby, 800);
+  gameChatPollTimer = window.setInterval(refreshGameChat, 2200);
 }
 
 async function createFlightParty() {
@@ -9142,7 +9960,7 @@ async function quickMatchParty() {
       gameMode: selectedMultiplayerMode,
     });
     updatePartyLobby(result.lobby);
-    setLobbyMessage(result.message || `Match found. Loading lobby ${result.lobby.members.length}/${result.lobby.maxPlayers}; free fly while pilots join.`);
+    setLobbyMessage(result.message || `Match found. Waiting for at least ${minimumOnlineRacePlayers(result.lobby)} pilots; free fly while everyone loads in.`);
     enterPartyWaitingFlight();
   } catch (error) { setLobbyMessage(error.message, true); }
 }
@@ -9550,11 +10368,13 @@ function setSelectedMultiplayerMode(mode) {
   }
   const capacity = document.querySelector('#serverCapacity');
   const capacityHint = document.querySelector('#serverCapacityHint');
+  const minimumPlayersHint = document.querySelector('#serverMinPlayersHint');
   if (capacity) {
     const relayMode = mode === 'relay-race';
     capacity.disabled = relayMode;
     if (relayMode) capacity.value = '8';
     if (capacityHint) capacityHint.hidden = !relayMode;
+    if (minimumPlayersHint) minimumPlayersHint.hidden = relayMode;
   }
   return true;
 }
@@ -9796,10 +10616,13 @@ document.querySelector('#authModal').addEventListener('click', (event) => {
 document.querySelector('#accountButton').addEventListener('click', () => openAuthModal('signin'));
 document.querySelector('#signOutButton').addEventListener('click', async () => {
   window.clearInterval(partyPollTimer);
+  window.clearInterval(gameChatPollTimer);
   partyPollTimer = 0;
+  gameChatPollTimer = 0;
   try { await lobbyRequest('leave'); } catch { /* Account logout also removes this pilot from the party. */ }
   try { await authRequest('logout', {}); } catch { /* Clear the local signed-in state either way. */ }
   signedInUser = null;
+  updateGameChatUI();
   stopFriendsPolling();
   closeFriendsPanel();
   updatePartyLobby(null);
@@ -9844,6 +10667,8 @@ function setPage(page) {
   }
   if (page !== 'builder') setBuilderSettingsOpen(false);
   currentPage = page;
+  updateBuilderRelayPodiumGateIndicators();
+  updateFlightMainMenuButton();
   if (page === 'builder') updateBuilderAssetLibrary(builderGameMode);
   environmentState = page === 'builder'
     ? readBuilderBiomeEnvironment(activeBiome)
@@ -9903,7 +10728,7 @@ function setPage(page) {
     trackRoot.visible = false;
     builderFlightRoot.visible = false;
     defaultGateObjects.forEach((gate) => { gate.visible = false; });
-    document.querySelector('.builder-canvas-hud small').textContent = 'CLICK PLACE · DRAG OBJECT MOVE · DRAG FIELD ORBIT · RIGHT-DRAG PAN · SCROLL ZOOM · WASD/QE MOVE · DELETE REMOVE';
+    document.querySelector('.builder-canvas-hud small').textContent = 'CLICK PLACE · DRAG OBJECT MOVE · DRAG FIELD ORBIT · RIGHT-DRAG PAN · SCROLL ROTATE PREVIEW · SCROLL ZOOM WHEN NOT PLACING · WASD/QE MOVE · DELETE REMOVE';
     showDrone.visible = false;
     fieldSpot.visible = false;
     orbit.enabled = true;
@@ -10036,6 +10861,7 @@ document.querySelector('#openTrackBuilder').addEventListener('click', () => {
   builderProps = [];
   builderPropObjects = [];
   builderPlacementHistory = [];
+  clearBuilderRaceLine();
   selectedGateId = null;
   selectedBuilderPropId = null;
   selectedEnvironmentBuildingId = null;
@@ -10062,6 +10888,17 @@ document.querySelector('#builderSettingsToggle').addEventListener('click', (even
   setBuilderSettingsOpen(event.currentTarget.getAttribute('aria-expanded') !== 'true');
 });
 document.querySelector('#builderSettingsClose').addEventListener('click', () => setBuilderSettingsOpen(false));
+document.querySelector('#generateBuilderRaceLine').addEventListener('click', generateBuilderRaceLine);
+document.querySelector('#deleteBuilderRaceLine').addEventListener('click', () => {
+  if (!builderRaceLineGenerated) return;
+  if (selectedBuilderRaceLinePointIndex !== null) detachBuilderPropTransform();
+  clearBuilderRaceLine();
+  builderRaceLineRoot.visible = false;
+  document.querySelector('#builderPlacementStatus').textContent = 'SELECT OR CHOOSE AN OBJECT';
+  invalidateBuilderTrackPicture();
+  updateBuilderDisplay();
+  showToast('Race line deleted.');
+});
 
 const keys = new Set();
 const previousFlightPosition = new THREE.Vector3();
@@ -10131,10 +10968,9 @@ function updateCourseProgress(nextIndex, complete = false) {
   const panel = document.querySelector('#courseProgress');
   if (!panel) return;
   panel.hidden = !flying || flightCourseEntries.length === 0;
-  document.querySelector('#courseProgressName').textContent = complete
-    ? `${activeFlightCourseName.toUpperCase()} / COMPLETE`
-    : `${activeFlightCourseName.toUpperCase()} / ${flightCourseEntries[nextIndex]?.role || 'READY'}`;
-  document.querySelector('#courseProgressCount').textContent = `${Math.min(nextIndex + 1, flightCourseEntries.length)} / ${flightCourseEntries.length}`;
+  const completedLaps = flightCourseEntries.slice(0, nextIndex).filter((entry) => entry.isLapFinish).length;
+  const currentLap = complete ? flightCourseLapCount : Math.min(flightCourseLapCount, completedLaps + 1);
+  document.querySelector('#courseProgressCount').textContent = `Lap: ${currentLap}/${flightCourseLapCount}`;
   if (selectedMode === 'Race' || builderTestCourse) {
     document.querySelector('#flightPrompt').textContent = complete
       ? 'COURSE COMPLETE. NICE LINE.'
@@ -10153,18 +10989,15 @@ function isMultiplayerRaceActive() {
   return activePhases.includes(partyRacePhase) || activeStatuses.includes(partyLobby?.status);
 }
 
+function updateFlightMainMenuButton() {
+  flightMainMenuButton.hidden = !(flying && !partyLobby?.code && !hasOtherPartyMembers() && !isMultiplayerRaceActive());
+}
+
 function updateRaceTimerDisplay(now = performance.now()) {
   const panel = document.querySelector('#raceTimer');
   if (!panel) return;
   panel.hidden = !flying || !raceTimerEnabled;
   panel.classList.toggle('is-local-race', raceTimerEnabled && !isMultiplayerRaceActive());
-  const restartHint = document.querySelector('#raceRestartHint');
-  if (restartHint) {
-    const bindings = ['R'];
-    if (inputConfig.restartButton !== null) bindings.push(`B${inputConfig.restartButton + 1}`);
-    restartHint.textContent = `${bindings.join(' / ')} TO RESTART`;
-    restartHint.hidden = !raceTimerEnabled || isMultiplayerRaceActive();
-  }
   if (panel.hidden) return;
   const label = document.querySelector('#raceTimerLabel');
   const value = document.querySelector('#raceTimerValue');
@@ -10197,11 +11030,16 @@ function makeFlightGateEntry(gate, role, radius = 2.05, indicator = null, center
   };
 }
 
-function getRacePodiumLaunchYaw(podium) {
+function getRacePodiumModel(podium) {
   let launchModel = podium;
   podium.traverse((object) => {
     if (object.userData.isRedRacePodiumModel) launchModel = object;
   });
+  return launchModel;
+}
+
+function getRacePodiumLaunchYaw(podium) {
+  const launchModel = getRacePodiumModel(podium);
   launchModel.updateWorldMatrix(true, false);
   return new THREE.Euler().setFromQuaternion(launchModel.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
 }
@@ -10224,7 +11062,36 @@ function orderedRelayStationPodiumObjects(gateEntries, userPodiumObjects) {
       }
     });
     if (nearestIndex < 0 || nearestDistance > RELAY_GATE_PODIUM_DISTANCE) return [];
-    stations.push(availablePodiums.splice(nearestIndex, 1)[0]);
+    const podium = availablePodiums.splice(nearestIndex, 1)[0];
+    const planeIndex = Number.isInteger(entry.planeIndex) ? entry.planeIndex : 0;
+    const plane = entry.object.userData.gatePassPlanes?.[planeIndex];
+    const gateData = entry.object.userData.gateData;
+    const entryDirection = gateData?.entryDirections?.[planeIndex] ?? gateData?.entryDirection ?? 1;
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(entry.object.matrixWorld);
+    const approachNormal = plane
+      ? plane.normal.clone().applyMatrix3(normalMatrix).normalize()
+      : new THREE.Vector3(0, 0, 1).applyQuaternion(entry.object.getWorldQuaternion(new THREE.Quaternion()));
+    approachNormal.y = 0;
+    if (approachNormal.lengthSq() < 0.001) approachNormal.set(0, 0, 1);
+    approachNormal.normalize().multiplyScalar(entryDirection === -1 ? -1 : 1);
+
+    const gateFront = plane
+      ? plane.point.clone().applyMatrix4(entry.object.matrixWorld)
+      : entry.object.getWorldPosition(new THREE.Vector3());
+    const podiumWorldPosition = gateFront;
+    podiumWorldPosition.y = terrainSurfaceYAt(activeBiome, podiumWorldPosition.x, podiumWorldPosition.z);
+
+    const podiumParent = podium.parent;
+    if (podiumParent) {
+      podiumParent.updateWorldMatrix(true, false);
+      podium.position.copy(podiumParent.worldToLocal(podiumWorldPosition));
+      const parentWorldQuaternion = podiumParent.getWorldQuaternion(new THREE.Quaternion());
+      const podiumWorldYaw = Math.atan2(approachNormal.x, approachNormal.z);
+      const desiredWorldQuaternion = new THREE.Quaternion().setFromAxisAngle(axisY, podiumWorldYaw);
+      podium.quaternion.copy(parentWorldQuaternion.invert().multiply(desiredWorldQuaternion));
+      podium.updateWorldMatrix(false, true);
+    }
+    stations.push(podium);
   }
   return stations;
 }
@@ -10247,7 +11114,7 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
   let yaw;
   if (podium) {
     podium.updateWorldMatrix(true, false);
-    center = podium.getWorldPosition(new THREE.Vector3());
+    center = getRacePodiumModel(podium).getWorldPosition(new THREE.Vector3());
     yaw = getRacePodiumLaunchYaw(podium);
   } else {
     const platform = new THREE.Group();
@@ -10257,7 +11124,7 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
     if (podiums.length) {
       offsetBase = podiums[0];
       offsetBase.updateWorldMatrix(true, false);
-      center = offsetBase.getWorldPosition(new THREE.Vector3());
+      center = getRacePodiumModel(offsetBase).getWorldPosition(new THREE.Vector3());
       yaw = getRacePodiumLaunchYaw(offsetBase);
     } else {
       center = gatePosition.clone().addScaledVector(approachNormal, 12);
@@ -10277,7 +11144,7 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
   const worldScale = podium.getWorldScale(new THREE.Vector3());
   const topY = center.y + RED_RACE_PODIUM_TOP_Y * worldScale.y;
   const startPosition = new THREE.Vector3(center.x, topY + 0.68, center.z);
-  const heading = yaw;
+  const heading = yaw + RED_RACE_PODIUM_DRONE_LEFT_TURN;
   launchPadState = {
     center: center.clone(),
     position: startPosition,
@@ -10301,8 +11168,9 @@ function prepareBuilderTestCourse() {
     if (!gate) continue;
     const indicator = createGateIndicator(gate);
     let centerY = builderGateFlightCenterY;
-    if (slot.openingIndex !== null) {
-      const plane = gate.userData.gatePassPlanes[slot.openingIndex];
+    const openingIndex = slot.openingIndex ?? 0;
+    const plane = gate.userData.gatePassPlanes?.[openingIndex] || gate.userData.gatePassPlanes?.[0];
+    if (plane) {
       indicator.position.copy(plane.point);
       indicator.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), plane.normal);
       centerY = plane.point.y;
@@ -10372,7 +11240,7 @@ function repeatCourseEntries(baseEntries, lapCount) {
     finishIndicator.quaternion.copy(startEntry.indicator.quaternion);
     finishIndicator.visible = false;
     repeatCourseIndicators.push(finishIndicator);
-    entries.push({ ...startEntry, role: `START / FINISH / LAP ${lap + 1}`, indicator: finishIndicator, passed: false });
+    entries.push({ ...startEntry, role: `START / FINISH / LAP ${lap + 1}`, indicator: finishIndicator, passed: false, isLapFinish: true });
   }
   return entries;
 }
@@ -10380,6 +11248,7 @@ function repeatCourseEntries(baseEntries, lapCount) {
 function prepareFlightCourse() {
   if (partyRacePhase === 'waiting' && partyLobby) {
     builderTestCourse = false;
+    flightCourseLapCount = 1;
     builderFlightRoot.visible = false;
     trackRoot.visible = true;
     flightCourseEntries = [];
@@ -10416,7 +11285,9 @@ function prepareFlightCourse() {
     ? Number(document.querySelector('#builderLapCount').value)
     : Number(activeTrack?.laps);
   const lapCount = THREE.MathUtils.clamp(Number.isFinite(requestedLaps) && requestedLaps > 0 ? Math.floor(requestedLaps) : 1, 1, 5);
+  flightCourseLapCount = lapCount;
   flightCourseEntries = repeatCourseEntries(baseEntries, lapCount);
+  flightCourseEntries.forEach((entry) => entry.indicator?.scale.setScalar(2.5));
   const relayMatch = !builderTestCourse && partyLobby?.gameMode === 'relay-race' && ['grid', 'race'].includes(partyRacePhase);
   if (relayMatch) {
     flightCourseEntries = flightCourseEntries.slice(1);
@@ -10539,6 +11410,642 @@ function playUiSound(kind = 'click') {
   } catch { /* Interface sounds are optional if Web Audio is unavailable. */ }
 }
 
+function lobbyMusicMidiFrequency(note) {
+  return 440 * (2 ** ((note - 69) / 12));
+}
+
+function createLobbyMusicNoiseBuffer(context) {
+  const buffer = context.createBuffer(1, Math.floor(context.sampleRate * 0.35), context.sampleRate);
+  const channel = buffer.getChannelData(0);
+  for (let index = 0; index < channel.length; index += 1) {
+    channel[index] = Math.random() * 2 - 1;
+  }
+  return buffer;
+}
+
+function createLobbyMusicImpulse(context) {
+  const length = Math.floor(context.sampleRate * 1.35);
+  const impulse = context.createBuffer(2, length, context.sampleRate);
+  for (let channelIndex = 0; channelIndex < impulse.numberOfChannels; channelIndex += 1) {
+    const channel = impulse.getChannelData(channelIndex);
+    for (let index = 0; index < length; index += 1) {
+      const fade = (1 - index / length) ** 2.6;
+      channel[index] = (Math.random() * 2 - 1) * fade * 0.24;
+    }
+  }
+  return impulse;
+}
+
+function scheduleLobbyMusicNoise(run, time, duration, cutoff, peak, type = 'highpass') {
+  const context = audioContext;
+  const source = context.createBufferSource();
+  const filter = context.createBiquadFilter();
+  const envelope = context.createGain();
+  source.buffer = run.noise;
+  filter.type = type;
+  filter.frequency.setValueAtTime(cutoff, time);
+  filter.Q.value = type === 'bandpass' ? 0.8 : 0.6;
+  envelope.gain.setValueAtTime(0.0001, time);
+  envelope.gain.linearRampToValueAtTime(peak, time + 0.004);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+  source.connect(filter).connect(envelope).connect(run.bus);
+  source.start(time);
+  source.stop(time + duration + 0.01);
+}
+
+function scheduleLobbyMusicKick(run, time) {
+  const context = audioContext;
+  const style = run.style;
+  const oscillator = context.createOscillator();
+  const envelope = context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(142, time);
+  oscillator.frequency.exponentialRampToValueAtTime(43, time + 0.15);
+  envelope.gain.setValueAtTime(0.0001, time);
+  envelope.gain.linearRampToValueAtTime(style.kickPeak, time + 0.005);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, time + 0.28);
+  oscillator.connect(envelope).connect(run.bus);
+  oscillator.start(time);
+  oscillator.stop(time + 0.3);
+}
+
+function scheduleLobbyMusicBass(run, time, note, duration) {
+  const context = audioContext;
+  const style = run.style;
+  const oscillator = context.createOscillator();
+  const filter = context.createBiquadFilter();
+  const envelope = context.createGain();
+  oscillator.type = style.bassWaveform;
+  oscillator.frequency.setValueAtTime(lobbyMusicMidiFrequency(note), time);
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(style.bassFilterStart, time);
+  filter.frequency.exponentialRampToValueAtTime(style.bassFilterPeak, time + style.bassFilterAttack);
+  filter.frequency.exponentialRampToValueAtTime(style.bassFilterEnd, time + duration);
+  filter.Q.value = style.bassFilterQ;
+  envelope.gain.setValueAtTime(0.0001, time);
+  envelope.gain.linearRampToValueAtTime(style.bassPeak, time + style.bassAttack);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, time + duration + 0.045);
+  oscillator.connect(filter).connect(envelope).connect(run.bus);
+  oscillator.start(time);
+  oscillator.stop(time + duration + 0.06);
+}
+
+function scheduleLobbyMusicLead(run, time, note, duration) {
+  const context = audioContext;
+  const style = run.style;
+  const oscillator = context.createOscillator();
+  const filter = context.createBiquadFilter();
+  const envelope = context.createGain();
+  oscillator.type = style.leadWaveform;
+  oscillator.frequency.setValueAtTime(lobbyMusicMidiFrequency(note), time);
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(style.leadFilterStart, time);
+  filter.frequency.exponentialRampToValueAtTime(style.leadFilterEnd, time + duration);
+  filter.Q.value = style.leadFilterQ;
+  envelope.gain.setValueAtTime(0.0001, time);
+  envelope.gain.linearRampToValueAtTime(style.leadPeak, time + style.leadAttack);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+  oscillator.connect(filter).connect(envelope);
+  envelope.connect(run.bus);
+  const echoSend = context.createGain();
+  echoSend.gain.value = style.leadDelaySend;
+  envelope.connect(echoSend).connect(run.delay);
+  const reverbSend = context.createGain();
+  reverbSend.gain.value = style.leadReverbSend;
+  envelope.connect(reverbSend).connect(run.reverb);
+  oscillator.start(time);
+  oscillator.stop(time + duration + 0.03);
+}
+
+function scheduleLobbyMusicChord(run, time, chord, duration) {
+  const context = audioContext;
+  const style = run.style;
+  chord.intervals.forEach((interval, index) => {
+    const oscillator = context.createOscillator();
+    const filter = context.createBiquadFilter();
+    const envelope = context.createGain();
+    oscillator.type = style.chordWaveforms[index] || style.chordWaveforms[0];
+    oscillator.detune.value = index === 1 ? -style.chordDetune : index === 2 ? style.chordDetune * 0.8 : 0;
+    oscillator.frequency.setValueAtTime(lobbyMusicMidiFrequency(chord.root + 24 + interval), time);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(style.chordFilter, time);
+    filter.Q.value = style.chordFilterQ;
+    envelope.gain.setValueAtTime(0.0001, time);
+    envelope.gain.linearRampToValueAtTime(style.chordPeak, time + style.chordAttack);
+    envelope.gain.setValueAtTime(style.chordSustain, time + Math.max(style.chordAttack + 0.01, duration - style.chordRelease));
+    envelope.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    oscillator.connect(filter).connect(envelope);
+    envelope.connect(run.bus);
+    const reverbSend = context.createGain();
+    reverbSend.gain.value = style.chordReverbSend;
+    envelope.connect(reverbSend).connect(run.reverb);
+    oscillator.start(time);
+    oscillator.stop(time + duration + 0.04);
+  });
+}
+
+const lobbyEDMBaseSongs = [
+  {
+    bpm: 124,
+    loops: 4,
+    chords: [
+      { root: 45, intervals: [0, 3, 7, 10] },
+      { root: 41, intervals: [0, 4, 7, 11] },
+      { root: 48, intervals: [0, 4, 7, 11] },
+      { root: 43, intervals: [0, 4, 7, 10] },
+    ],
+    kickSteps: [0, 4, 8, 12],
+    snareSteps: [4, 12],
+    hatSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    bassSteps: [0, 6, 8, 11, 14],
+    bassFifthSteps: [6, 14],
+    leadSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    leadPattern: [0, 2, 1, 2, 3, 2, 1, 2],
+  },
+  {
+    bpm: 126,
+    loops: 4,
+    chords: [
+      { root: 50, intervals: [0, 4, 7, 11] },
+      { root: 47, intervals: [0, 3, 7, 10] },
+      { root: 43, intervals: [0, 4, 7, 11] },
+      { root: 45, intervals: [0, 4, 7, 10] },
+    ],
+    kickSteps: [0, 4, 8, 12],
+    snareSteps: [4, 12],
+    hatSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    bassSteps: [0, 4, 7, 8, 12, 14],
+    bassFifthSteps: [7, 14],
+    leadSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    leadPattern: [0, 2, 3, 2, 1, 3, 2, 1],
+  },
+  {
+    bpm: 120,
+    loops: 4,
+    chords: [
+      { root: 48, intervals: [0, 4, 7, 11] },
+      { root: 43, intervals: [0, 4, 7, 10] },
+      { root: 45, intervals: [0, 3, 7, 10] },
+      { root: 41, intervals: [0, 4, 7, 11] },
+    ],
+    kickSteps: [0, 4, 8, 12],
+    snareSteps: [4, 12],
+    hatSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    bassSteps: [0, 4, 8, 12],
+    bassFifthSteps: [4, 12],
+    leadSteps: [0, 3, 4, 7, 8, 11, 12, 15],
+    leadPattern: [0, 1, 2, 1, 3, 2, 1, 0],
+  },
+  {
+    bpm: 128,
+    loops: 4,
+    chords: [
+      { root: 40, intervals: [0, 3, 7, 10] },
+      { root: 43, intervals: [0, 4, 7, 11] },
+      { root: 45, intervals: [0, 4, 7, 10] },
+      { root: 47, intervals: [0, 3, 7, 10] },
+    ],
+    kickSteps: [0, 4, 8, 12],
+    snareSteps: [4, 12],
+    hatSteps: [0, 2, 4, 6, 8, 10, 12, 14, 15],
+    bassSteps: [0, 3, 6, 8, 11, 14],
+    bassFifthSteps: [6, 14],
+    leadSteps: [0, 2, 5, 6, 8, 10, 13, 14],
+    leadPattern: [0, 2, 1, 3, 2, 1, 3, 2],
+  },
+];
+
+const lobbyDreamwaveBaseSongs = [
+  {
+    bpm: 94,
+    loops: 3,
+    chords: [
+      { root: 41, intervals: [0, 4, 7, 11] },
+      { root: 45, intervals: [0, 3, 7, 10] },
+      { root: 48, intervals: [0, 4, 7, 11] },
+      { root: 43, intervals: [0, 2, 7, 10] },
+    ],
+    kickSteps: [0, 8],
+    snareSteps: [12],
+    hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 8],
+    bassFifthSteps: [8],
+    leadSteps: [0, 4, 8, 12],
+    leadPattern: [0, 2, 1, 3],
+  },
+  {
+    bpm: 98,
+    loops: 3,
+    chords: [
+      { root: 38, intervals: [0, 3, 7, 10] },
+      { root: 46, intervals: [0, 4, 7, 11] },
+      { root: 41, intervals: [0, 4, 7, 11] },
+      { root: 48, intervals: [0, 4, 7, 11] },
+    ],
+    kickSteps: [0, 8],
+    snareSteps: [12],
+    hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 8, 12],
+    bassFifthSteps: [8],
+    leadSteps: [0, 3, 6, 8, 11, 14],
+    leadPattern: [0, 2, 1, 3, 2, 1],
+  },
+  {
+    bpm: 92,
+    loops: 3,
+    chords: [
+      { root: 40, intervals: [0, 3, 7, 10] },
+      { root: 43, intervals: [0, 4, 7, 11] },
+      { root: 48, intervals: [0, 4, 7, 11] },
+      { root: 45, intervals: [0, 3, 7, 10] },
+    ],
+    kickSteps: [0, 8],
+    snareSteps: [12],
+    hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 6, 8, 14],
+    bassFifthSteps: [6, 14],
+    leadSteps: [0, 4, 7, 8, 12, 15],
+    leadPattern: [0, 2, 1, 3, 2, 0],
+  },
+];
+
+const lobbyMusicStyles = {
+  edm: {
+    masterGain: 0.68,
+    delaySteps: 3,
+    feedback: 0.17,
+    delayReturn: 0.2,
+    reverbReturn: 0.16,
+    kickPeak: 0.48,
+    snareGain: 1,
+    hatGain: 1,
+    bassWaveform: 'sawtooth',
+    bassFilterStart: 190,
+    bassFilterPeak: 560,
+    bassFilterEnd: 210,
+    bassFilterAttack: 0.055,
+    bassFilterQ: 1.2,
+    bassPeak: 0.16,
+    bassAttack: 0.012,
+    leadWaveform: 'triangle',
+    leadFilterStart: 2600,
+    leadFilterEnd: 1150,
+    leadFilterQ: 0.8,
+    leadPeak: 0.058,
+    leadAttack: 0.009,
+    leadDelaySend: 0.24,
+    leadReverbSend: 0.16,
+    chordWaveforms: ['triangle', 'sawtooth', 'sawtooth', 'sawtooth'],
+    chordDetune: 5,
+    chordFilter: 1250,
+    chordFilterQ: 0.5,
+    chordPeak: 0.022,
+    chordSustain: 0.018,
+    chordAttack: 0.12,
+    chordRelease: 0.3,
+    chordReverbSend: 0.24,
+  },
+  dreamwave: {
+    masterGain: 0.68,
+    delaySteps: 4,
+    feedback: 0.23,
+    delayReturn: 0.24,
+    reverbReturn: 0.34,
+    kickPeak: 0.22,
+    snareGain: 0.62,
+    hatGain: 0.48,
+    bassWaveform: 'triangle',
+    bassFilterStart: 125,
+    bassFilterPeak: 290,
+    bassFilterEnd: 145,
+    bassFilterAttack: 0.11,
+    bassFilterQ: 0.65,
+    bassPeak: 0.095,
+    bassAttack: 0.04,
+    leadWaveform: 'sine',
+    leadFilterStart: 1700,
+    leadFilterEnd: 720,
+    leadFilterQ: 0.55,
+    leadPeak: 0.034,
+    leadAttack: 0.045,
+    leadDelaySend: 0.38,
+    leadReverbSend: 0.38,
+    chordWaveforms: ['triangle', 'triangle', 'triangle', 'triangle'],
+    chordDetune: 2,
+    chordFilter: 950,
+    chordFilterQ: 0.35,
+    chordPeak: 0.018,
+    chordSustain: 0.014,
+    chordAttack: 0.34,
+    chordRelease: 0.55,
+    chordReverbSend: 0.48,
+  },
+};
+
+const lobbyEDMRhythmPatterns = [
+  {
+    kickSteps: [0, 4, 8, 12], snareSteps: [4, 12], hatSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    bassSteps: [0, 6, 8, 11, 14], bassFifthSteps: [6, 14],
+    leadSteps: [0, 2, 4, 6, 8, 10, 12, 14], leadPattern: [0, 2, 1, 2, 3, 2, 1, 2],
+  },
+  {
+    kickSteps: [0, 4, 8, 12], snareSteps: [4, 12], hatSteps: [0, 2, 4, 6, 8, 10, 12, 14, 15],
+    bassSteps: [0, 4, 6, 8, 12, 14], bassFifthSteps: [6, 14],
+    leadSteps: [0, 2, 5, 6, 8, 10, 13, 14], leadPattern: [0, 2, 1, 3, 2, 1, 3, 2],
+  },
+  {
+    kickSteps: [0, 4, 8, 12], snareSteps: [4, 12], hatSteps: [0, 2, 4, 6, 8, 10, 12, 14],
+    bassSteps: [0, 3, 6, 8, 11, 14], bassFifthSteps: [6, 14],
+    leadSteps: [0, 2, 4, 6, 8, 10, 12, 14], leadPattern: [2, 1, 3, 2, 0, 1, 2, 3],
+  },
+  {
+    kickSteps: [0, 4, 8, 12], snareSteps: [4, 12], hatSteps: [0, 2, 3, 4, 6, 8, 10, 11, 12, 14],
+    bassSteps: [0, 4, 7, 8, 12, 14], bassFifthSteps: [7, 14],
+    leadSteps: [0, 2, 4, 6, 8, 10, 12, 14], leadPattern: [3, 2, 1, 0, 1, 2, 3, 2],
+  },
+];
+
+const lobbyDreamwaveRhythmPatterns = [
+  {
+    kickSteps: [0, 8], snareSteps: [12], hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 8], bassFifthSteps: [8],
+    leadSteps: [0, 4, 8, 12], leadPattern: [0, 2, 1, 3],
+  },
+  {
+    kickSteps: [0, 8], snareSteps: [4, 12], hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 4, 8, 12], bassFifthSteps: [4, 12],
+    leadSteps: [0, 3, 6, 8, 11, 14], leadPattern: [0, 2, 1, 3, 2, 1],
+  },
+  {
+    kickSteps: [0, 8, 14], snareSteps: [12], hatSteps: [2, 6, 10, 14],
+    bassSteps: [0, 6, 8, 14], bassFifthSteps: [6, 14],
+    leadSteps: [0, 4, 7, 8, 12, 15], leadPattern: [0, 2, 1, 3, 2, 0],
+  },
+  {
+    kickSteps: [0, 8], snareSteps: [12], hatSteps: [4, 8, 14],
+    bassSteps: [0, 8, 12], bassFifthSteps: [8],
+    leadSteps: [0, 4, 8, 12], leadPattern: [3, 1, 2, 0],
+  },
+];
+
+function createLobbyMusicVariations(baseSongs, styleName, count, bpmMin, bpmMax, rhythmPatterns, seed) {
+  const transpositions = [0, 2, 3, 5, 7, 9, 10, 12];
+  const bpmRange = bpmMax - bpmMin + 1;
+  return Array.from({ length: count }, (_, index) => {
+    const sourceIndex = index === 0 ? 0 : (index * 2 + Math.floor(index / baseSongs.length) + seed) % baseSongs.length;
+    const patternIndex = index === 0 ? 0 : (index * 3 + Math.floor(index / rhythmPatterns.length) + seed) % rhythmPatterns.length;
+    const source = baseSongs[sourceIndex];
+    const pattern = rhythmPatterns[patternIndex];
+    const transpose = index === 0 ? 0 : transpositions[(index * 5 + seed) % transpositions.length];
+    const bpm = bpmMin + ((index * 7 + Math.floor(index / 3) * 2 + seed - 1) % bpmRange);
+    return {
+      style: styleName,
+      bpm,
+      loops: index < baseSongs.length ? source.loops : 2 + (index % 6 === 0 ? 1 : 0),
+      chords: source.chords.map((chord) => ({
+        root: chord.root + transpose,
+        intervals: [...chord.intervals],
+      })),
+      kickSteps: [...pattern.kickSteps],
+      snareSteps: [...pattern.snareSteps],
+      hatSteps: [...pattern.hatSteps],
+      bassSteps: [...pattern.bassSteps],
+      bassFifthSteps: [...pattern.bassFifthSteps],
+      leadSteps: [...pattern.leadSteps],
+      leadPattern: [...pattern.leadPattern],
+    };
+  });
+}
+
+const lobbyEDMSongs = createLobbyMusicVariations(
+  lobbyEDMBaseSongs, 'edm', 50, 132, 146, lobbyEDMRhythmPatterns, 1,
+);
+const lobbyDreamwaveSongs = createLobbyMusicVariations(
+  lobbyDreamwaveBaseSongs, 'dreamwave', 50, 88, 104, lobbyDreamwaveRhythmPatterns, 6,
+);
+const lobbyMusicPlaylist = lobbyEDMSongs.flatMap((edmSong, index) => [edmSong, lobbyDreamwaveSongs[index]]);
+
+function scheduleLobbyMusicStep(run, step, time) {
+  const stepInBar = step % 16;
+  const bar = Math.floor(step / 16);
+  const song = run.playlist[run.songIndex];
+  const chord = song.chords[bar];
+  if (song.kickSteps.includes(stepInBar)) scheduleLobbyMusicKick(run, time);
+  if (song.snareSteps.includes(stepInBar)) {
+    scheduleLobbyMusicNoise(run, time, 0.18, 1850, 0.095 * run.style.snareGain, 'bandpass');
+  }
+  if (song.hatSteps.includes(stepInBar)) {
+    const accent = stepInBar === 14;
+    scheduleLobbyMusicNoise(run, time, accent ? 0.13 : 0.045, accent ? 6700 : 8200, (accent ? 0.05 : 0.024) * run.style.hatGain);
+  }
+  if (song.bassSteps.includes(stepInBar)) {
+    const fifth = song.bassFifthSteps.includes(stepInBar);
+    scheduleLobbyMusicBass(run, time, chord.root - 12 + (fifth ? 7 : 0), run.stepDuration * (fifth ? 1.35 : 1.7));
+  }
+  if (stepInBar === 0) scheduleLobbyMusicChord(run, time, chord, run.stepDuration * 15.6);
+  const leadIndex = song.leadSteps.indexOf(stepInBar);
+  if (leadIndex >= 0) {
+    const intervalIndex = song.leadPattern[leadIndex];
+    scheduleLobbyMusicLead(run, time, chord.root + 24 + chord.intervals[intervalIndex], run.stepDuration * 1.45);
+  }
+}
+
+function startLobbyMusic() {
+  if (lobbyMusicRun || !lobbyMusicEnabled) return;
+  try {
+    audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === 'suspended') {
+      void audioContext.resume().catch(() => { /* Browser audio may wait for another user gesture. */ });
+    }
+    const context = audioContext;
+    const firstSong = lobbyMusicPlaylist[0];
+    const style = lobbyMusicStyles[firstSong.style];
+    const run = {
+      playlist: lobbyMusicPlaylist,
+      style,
+      step: 0,
+      songIndex: 0,
+      loopsInSong: 0,
+      stepDuration: 60 / firstSong.bpm / 4,
+      nextTime: context.currentTime + 0.07,
+      noise: createLobbyMusicNoiseBuffer(context),
+    };
+    run.bus = context.createGain();
+    run.compressor = context.createDynamicsCompressor();
+    run.compressor.threshold.value = -18;
+    run.compressor.knee.value = 14;
+    run.compressor.ratio.value = 3;
+    run.compressor.attack.value = 0.006;
+    run.compressor.release.value = 0.2;
+    run.bus.gain.setValueAtTime(0.0001, context.currentTime);
+    run.bus.gain.linearRampToValueAtTime(style.masterGain * audioVolume, context.currentTime + 0.7);
+    run.analyser = context.createAnalyser();
+    run.analyser.fftSize = 1024;
+    run.analyser.smoothingTimeConstant = 0.68;
+    run.analyserData = new Uint8Array(run.analyser.frequencyBinCount);
+    run.bus.connect(run.compressor).connect(run.analyser).connect(context.destination);
+
+    run.reverb = context.createConvolver();
+    run.reverb.buffer = createLobbyMusicImpulse(context);
+    run.reverbReturn = context.createGain();
+    run.reverbReturn.gain.value = style.reverbReturn;
+    run.reverb.connect(run.reverbReturn).connect(run.bus);
+
+    run.delay = context.createDelay(0.7);
+    run.delay.delayTime.value = run.stepDuration * style.delaySteps;
+    run.feedback = context.createGain();
+    run.feedback.gain.value = style.feedback;
+    run.delayReturn = context.createGain();
+    run.delayReturn.gain.value = style.delayReturn;
+    run.delay.connect(run.feedback);
+    run.feedback.connect(run.delay);
+    run.delay.connect(run.delayReturn).connect(run.bus);
+
+    lobbyMusicRun = run;
+    const tick = () => {
+      if (lobbyMusicRun !== run) return;
+      const horizon = context.currentTime + 0.13;
+      while (run.nextTime < horizon) {
+        scheduleLobbyMusicStep(run, run.step, run.nextTime);
+        run.nextTime += run.stepDuration;
+        run.step += 1;
+        if (run.step >= 64) {
+          run.step = 0;
+          run.loopsInSong += 1;
+          const currentSong = run.playlist[run.songIndex];
+          if (run.loopsInSong >= currentSong.loops) {
+            run.songIndex = (run.songIndex + 1) % run.playlist.length;
+            run.loopsInSong = 0;
+            const nextSong = run.playlist[run.songIndex];
+            run.style = lobbyMusicStyles[nextSong.style];
+            run.stepDuration = 60 / nextSong.bpm / 4;
+            run.reverbReturn.gain.setTargetAtTime(run.style.reverbReturn, run.nextTime, 0.15);
+            run.feedback.gain.setTargetAtTime(run.style.feedback, run.nextTime, 0.15);
+            run.delayReturn.gain.setTargetAtTime(run.style.delayReturn, run.nextTime, 0.15);
+            run.delay.delayTime.setTargetAtTime(run.stepDuration * run.style.delaySteps, run.nextTime, 0.03);
+          }
+        }
+      }
+    };
+    tick();
+    run.timer = window.setInterval(tick, 25);
+  } catch { /* Lobby music is optional when Web Audio is unavailable. */ }
+}
+
+function stopLobbyMusic() {
+  const run = lobbyMusicRun;
+  if (!run) return;
+  lobbyMusicRun = null;
+  window.clearInterval(run.timer);
+  const context = audioContext;
+  if (!context) return;
+  const now = context.currentTime;
+  run.bus.gain.cancelScheduledValues(now);
+  run.bus.gain.setValueAtTime(run.bus.gain.value, now);
+  run.bus.gain.linearRampToValueAtTime(0.0001, now + 0.38);
+  window.setTimeout(() => {
+    [run.bus, run.compressor, run.analyser, run.reverb, run.reverbReturn, run.delay, run.feedback, run.delayReturn].forEach((node) => {
+      try { node.disconnect(); } catch { /* The audio node may already be disconnected. */ }
+    });
+  }, 650);
+}
+
+function updateLobbyMusicVolume() {
+  if (!lobbyMusicRun || !audioContext) return;
+  lobbyMusicRun.bus.gain.setTargetAtTime(lobbyMusicRun.style.masterGain * audioVolume, audioContext.currentTime, 0.06);
+}
+
+function updateLobbyMusicVisualization(dt) {
+  if (!menuStarMusicUniforms) return;
+  menuPlanetMotionTime += dt;
+  const run = lobbyMusicRun;
+  const samples = run?.analyserData;
+  let bass = 0;
+  let mids = 0;
+  let high = 0;
+  if (run?.analyser && samples && audioContext?.state === 'running') {
+    run.analyser.getByteFrequencyData(samples);
+    const averageBand = (start, end) => {
+      let total = 0;
+      for (let index = start; index <= end; index += 1) total += samples[index] || 0;
+      return total / (end - start + 1) / 255;
+    };
+    bass = averageBand(1, 5);
+    mids = averageBand(6, 40);
+    high = averageBand(41, 150);
+  }
+  const energy = THREE.MathUtils.clamp(bass * 2.1 + mids * 1.25 + high * 0.8, 0, 1);
+  const smoothing = 1 - Math.exp(-dt * (energy > menuStarMusicUniforms.energy.value ? 11 : 3.2));
+  menuStarMusicUniforms.energy.value += (energy - menuStarMusicUniforms.energy.value) * smoothing;
+  menuStarMusicUniforms.bass.value += (bass - menuStarMusicUniforms.bass.value) * smoothing;
+  menuStarMusicUniforms.mids.value += (mids - menuStarMusicUniforms.mids.value) * smoothing;
+  menuStarMusicUniforms.high.value += (high - menuStarMusicUniforms.high.value) * smoothing;
+  menuStarMusicUniforms.hue.value = (
+    menuStarMusicUniforms.bass.value * 0.52
+    + menuStarMusicUniforms.mids.value * 0.34
+    + menuStarMusicUniforms.high.value * 0.22
+  ) % 1;
+  if (menuStarField) {
+    menuStarField.rotation.y += dt * 0.0032;
+    menuStarField.rotation.x += dt * 0.00045;
+  }
+  const musicEnergy = menuStarMusicUniforms.energy.value;
+  const musicHue = menuStarMusicUniforms.hue.value;
+  const musicBands = {
+    bass: menuStarMusicUniforms.bass.value,
+    mids: menuStarMusicUniforms.mids.value,
+    high: menuStarMusicUniforms.high.value,
+  };
+  if (menuMoonGroup && menuMoonOrbit) {
+    const moonAngle = menuPlanetMotionTime * menuMoonOrbit.speed + menuMoonOrbit.phase;
+    menuMoonGroup.position.set(
+      Math.cos(moonAngle) * menuMoonOrbit.radiusX
+        + Math.sin(moonAngle * menuMoonOrbit.pathFrequency[0] + menuMoonOrbit.pathPhase) * menuMoonOrbit.pathWobble[0],
+      menuMoonOrbit.height + Math.sin(moonAngle * 0.72 + menuMoonOrbit.verticalPhase) * menuMoonOrbit.heightAmplitude,
+      menuPlatformCenterZ + Math.sin(moonAngle) * menuMoonOrbit.radiusZ
+        + Math.cos(moonAngle * menuMoonOrbit.pathFrequency[1] + menuMoonOrbit.pathPhase * 0.73) * menuMoonOrbit.pathWobble[1],
+    );
+    menuMoonGroup.rotation.y = moonAngle * 0.08;
+  }
+  menuPlanetVisuals.forEach((planet) => {
+    const orbit = menuPlanetMotionTime * planet.pathSpeed + planet.orbitPhase;
+    planet.root.position.x = Math.cos(orbit) * planet.orbitRadiusX
+      + Math.sin(orbit * planet.pathFrequency[0] + planet.pathPhase) * planet.pathWobble[0];
+    planet.root.position.y = planet.basePosition.y
+      + Math.sin(orbit * 0.72 + planet.verticalPhase) * planet.heightAmplitude;
+    planet.root.position.z = planet.basePosition.z
+      + Math.sin(orbit) * planet.orbitRadiusZ
+      + Math.cos(orbit * planet.pathFrequency[1] + planet.pathPhase * 0.73) * planet.pathWobble[1];
+    planet.root.rotation.z = Math.sin(orbit * 0.36) * 0.035;
+    planet.root.rotation.x = Math.cos(orbit * 0.29 + planet.orbitPhase) * 0.018;
+    planet.rings.forEach((ring) => {
+      const band = musicBands[ring.musicBand] ?? musicEnergy;
+      const beat = Math.sin(menuPlanetMotionTime * (4.5 + band * 5) + ring.hueOffset * Math.PI * 2);
+      const hue = THREE.MathUtils.euclideanModulo(musicHue * 0.65 + planet.hueOffset * 0.18 + ring.hueOffset * 0.16, 1);
+      ring.mesh.material.color.setHSL(hue, 0.78, 0.5 + band * 0.12 + musicEnergy * 0.06);
+      ring.mesh.material.opacity = THREE.MathUtils.clamp(ring.baseOpacity * (0.62 + band * 0.72 + musicEnergy * 0.28 + Math.max(0, beat) * 0.12), 0.05, 0.52);
+      const pulse = 1 + band * ring.pulseAmount + beat * (0.006 + band * 0.012);
+      ring.mesh.scale.setScalar(pulse);
+      ring.mesh.rotation.z += dt * ring.spinSpeed * (0.8 + band * 0.75);
+    });
+    planet.surface.rotation.y += dt * planet.rotationSpeed;
+    planet.surface.rotation.x += dt * planet.rotationSpeed * 0.12;
+  });
+}
+
+function syncLobbyMusic() {
+  const lobbyPages = new Set(['singleplayer', 'multiplayer', 'trackPicker', 'communityTracks', 'builderMenu', 'builder']);
+  const currentLobbyPage = currentPage === 'settings' ? pageBeforeSettings : currentPage;
+  const lobbyMenu = !flying && lobbyPages.has(currentLobbyPage);
+  const partyLobbyWaiting = Boolean(flying && partyLobby && partyRacePhase === 'waiting' && ['open', 'starting'].includes(partyLobby.status));
+  if (!lobbyMusicEnabled || (!lobbyMenu && !partyLobbyWaiting)) {
+    stopLobbyMusic();
+    return;
+  }
+  startLobbyMusic();
+  updateLobbyMusicVolume();
+}
+
 let lastUiHoverSoundAt = 0;
 document.addEventListener('pointerover', (event) => {
   const target = event.target instanceof Element ? event.target.closest('.menu-choice, .gate-type') : null;
@@ -10553,6 +12060,12 @@ document.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) return;
   const control = event.target.closest('button, a[href], [role="button"], [role="switch"], input[type="color"]');
   if (!control || control.matches(':disabled, [aria-disabled="true"]')) return;
+  if (lobbyMusicEnabled) {
+    try {
+      audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === 'suspended') void audioContext.resume().catch(() => { /* Audio can wait for another interaction. */ });
+    } catch { /* Lobby music is optional when Web Audio is unavailable. */ }
+  }
   if (control.id === 'soundToggle' && !soundEnabled) return;
   const navigating = control.matches('.menu-choice, [data-menu-choice], [data-page], #settingsButton, #builderBack');
   playUiSound(navigating ? 'navigate' : 'click');
@@ -10726,6 +12239,8 @@ async function enterFlight() {
   unlockGateAudio();
   if (currentPage === 'builder') setBuilderSettingsOpen(false);
   flying = true;
+  updateGameChatUI();
+  updateFlightMainMenuButton();
   syncBuilderTransformToolbar();
   syncGateBadgeVisibility();
   syncWorldMode();
@@ -10784,6 +12299,8 @@ function exitFlight() {
     void finishCrewRace(true);
   }
   flying = false;
+  updateGameChatUI();
+  updateFlightMainMenuButton();
   syncBuilderTransformToolbar();
   flightCollisionOctree.clear();
   syncGateBadgeVisibility();
@@ -10799,7 +12316,7 @@ function exitFlight() {
   partyCountdownNumber = '';
   document.querySelector('#raceStartOverlay').hidden = true;
   document.querySelector('#raceLeaderboard').hidden = true;
-  trackGateEntries.forEach((entry) => { entry.passed = false; entry.indicator.visible = true; entry.indicator.material.color.setHex(0x73ff8a); entry.indicator.material.opacity = 0.3; });
+  trackGateEntries.forEach((entry) => { entry.passed = false; entry.indicator.scale.setScalar(1); entry.indicator.visible = true; entry.indicator.material.color.setHex(0x73ff8a); entry.indicator.material.opacity = 0.3; });
   flightCourseEntries = [];
   builderTestCourse = false;
   trackRoot.visible = currentPage !== 'builder';
@@ -10846,6 +12363,11 @@ document.querySelector('#testTrack').addEventListener('click', () => {
   enterFlight();
 });
 document.querySelector('#exitFlight').addEventListener('click', exitFlight);
+flightMainMenuButton.addEventListener('click', () => {
+  if (!flying || partyLobby?.code || hasOtherPartyMembers() || isMultiplayerRaceActive()) return;
+  exitFlight();
+  setPage('singleplayer');
+});
 
 function normalizeBuilderGateSequence(startFinishId = null, startFinishOpeningIndex = null) {
   if (!builderGates.length) return;
@@ -10903,6 +12425,448 @@ function orderedBuilderGates() {
   return [startFinish, ...checkpoints];
 }
 
+function updateRelayPodiumGateIndicator(propObject, routeSlot, gateObject, stationIndex) {
+  const indicator = propObject.userData.relayPodiumGateIndicator;
+  if (!indicator || !routeSlot || !gateObject) return;
+  const openingIndex = Number.isInteger(routeSlot.openingIndex) ? routeSlot.openingIndex : 0;
+  const gateData = routeSlot.gate;
+  const entryDirection = gateData.entryDirections?.[openingIndex] ?? gateData.entryDirection ?? 1;
+  if (entryDirection === 0) {
+    indicator.userData.frontPanel.material.color.setHex(gateBoundaryWrongColor);
+    indicator.userData.backPanel.material.color.setHex(gateBoundaryWrongColor);
+    indicator.userData.paired = true;
+    indicator.userData.showInBuilder = currentPage === 'builder' && !flying;
+    indicator.visible = indicator.userData.showInBuilder;
+    indicator.userData.numberBadges.forEach((badge) => {
+      if (badge.userData.displayLabel !== 'N/A' || badge.userData.isEntrySide !== false) {
+        drawRelayPodiumGateNumberBadge(badge, 'N/A', false);
+        badge.userData.displayLabel = 'N/A';
+        badge.userData.isEntrySide = false;
+      }
+    });
+    return;
+  }
+
+  gateObject.updateWorldMatrix(true, false);
+  propObject.updateWorldMatrix(true, false);
+  const plane = gateObject.userData.gatePassPlanes?.[openingIndex];
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(gateObject.matrixWorld);
+  const approachNormal = plane
+    ? plane.normal.clone().applyMatrix3(normalMatrix).normalize()
+    : new THREE.Vector3(0, 0, 1).applyQuaternion(gateObject.getWorldQuaternion(new THREE.Quaternion()));
+  approachNormal.y = 0;
+  if (approachNormal.lengthSq() < 0.001) approachNormal.set(0, 0, 1);
+  approachNormal.normalize().multiplyScalar(entryDirection === -1 ? -1 : 1);
+
+  const propForward = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(propObject.getWorldQuaternion(new THREE.Quaternion()));
+  propForward.y = 0;
+  if (propForward.lengthSq() < 0.001) propForward.set(0, 0, 1);
+  propForward.normalize();
+  const frontIsEntry = propForward.dot(approachNormal) >= 0;
+  const frontPanel = indicator.userData.frontPanel;
+  const backPanel = indicator.userData.backPanel;
+  frontPanel.material.color.setHex(frontIsEntry ? gateBoundaryCorrectColor : gateBoundaryWrongColor);
+  backPanel.material.color.setHex(frontIsEntry ? gateBoundaryWrongColor : gateBoundaryCorrectColor);
+
+  const label = routeSlot.isStartFinish ? 'S / F' : String(stationIndex).padStart(2, '0');
+  for (const badge of indicator.userData.numberBadges) {
+    const isEntrySide = badge.userData.badgeSide === 'front' ? frontIsEntry : !frontIsEntry;
+    if (badge.userData.displayLabel !== label || badge.userData.isEntrySide !== isEntrySide) {
+      drawRelayPodiumGateNumberBadge(badge, label, isEntrySide);
+      badge.userData.displayLabel = label;
+      badge.userData.isEntrySide = isEntrySide;
+    }
+  }
+  indicator.userData.paired = true;
+  indicator.userData.showInBuilder = currentPage === 'builder' && !flying;
+  indicator.visible = indicator.userData.showInBuilder;
+}
+
+function updateBuilderRelayPodiumGateIndicators() {
+  const relayPodiums = builderPropObjects.filter((object) => object.userData.propType === 'relay-podium-gate');
+  const showInBuilder = currentPage === 'builder' && !flying;
+  relayPodiums.forEach((podium, index) => {
+    const indicator = podium.userData.relayPodiumGateIndicator;
+    if (indicator) {
+      indicator.userData.paired = false;
+      indicator.userData.showInBuilder = showInBuilder;
+      indicator.visible = showInBuilder;
+      const fallbackLabel = String(index + 1).padStart(2, '0');
+      indicator.userData.numberBadges.forEach((badge) => {
+        const isEntrySide = badge.userData.badgeSide === 'front';
+        if (badge.userData.displayLabel !== fallbackLabel || badge.userData.isEntrySide !== isEntrySide) {
+          drawRelayPodiumGateNumberBadge(badge, fallbackLabel, isEntrySide);
+          badge.userData.displayLabel = fallbackLabel;
+          badge.userData.isEntrySide = isEntrySide;
+        }
+      });
+    }
+  });
+  if (!showInBuilder || !relayPodiums.length) return;
+
+  const availablePodiums = relayPodiums.slice();
+  const stations = orderedBuilderGates().slice(0, RELAY_STATION_COUNT);
+  stations.forEach((routeSlot, stationIndex) => {
+    const gateObject = customGateObjects.find((object) => object.userData.gateId === routeSlot.gate.id);
+    if (!gateObject || !availablePodiums.length) return;
+    gateObject.updateWorldMatrix(true, false);
+    const gatePosition = gateObject.getWorldPosition(new THREE.Vector3());
+    let nearestIndex = -1;
+    let nearestDistance = Infinity;
+    availablePodiums.forEach((podium, index) => {
+      podium.updateWorldMatrix(true, false);
+      const position = podium.getWorldPosition(new THREE.Vector3());
+      const distance = Math.hypot(gatePosition.x - position.x, gatePosition.z - position.z);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    if (nearestIndex < 0 || nearestDistance > RELAY_GATE_PODIUM_DISTANCE) return;
+    const podium = availablePodiums.splice(nearestIndex, 1)[0];
+    updateRelayPodiumGateIndicator(podium, routeSlot, gateObject, stationIndex);
+  });
+}
+
+function clearRaceLineGroup(group) {
+  for (const object of [...group.children]) {
+    group.remove(object);
+    object.geometry?.dispose();
+    if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
+    else object.material?.dispose();
+  }
+}
+
+function clearBuilderRaceLine() {
+  clearRaceLineGroup(builderRaceLinePathRoot);
+  clearRaceLineGroup(builderRaceLineHandleRoot);
+  builderRaceLineRoot.visible = false;
+  builderRaceLineHandles = [];
+  builderRaceLinePoints = [];
+  builderRaceLineGateRefs = [];
+  builderRaceLineGenerated = false;
+  selectedBuilderRaceLinePointIndex = null;
+  document.querySelector('#deleteBuilderRaceLine').disabled = true;
+}
+
+function addBuilderRaceLineTube(curve, radius, color, opacity, segments) {
+  if (curve.getLength() < 0.05) return;
+  const geometry = new THREE.TubeGeometry(curve, segments, radius, 7, false);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 12;
+  mesh.userData.skipFlightCollision = true;
+  builderRaceLinePathRoot.add(mesh);
+}
+
+function rebuildBuilderRaceLineHandles() {
+  clearRaceLineGroup(builderRaceLineHandleRoot);
+  builderRaceLineHandles = builderRaceLinePoints.map((point, index) => {
+    const isGateCenter = index % 3 === 1;
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.48, 12, 10),
+      new THREE.MeshBasicMaterial({
+        color: isGateCenter ? 0x70ff9a : 0x73f6ff,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+      }),
+    );
+    handle.position.copy(point);
+    handle.renderOrder = 13;
+    handle.userData.isBuilderRaceLineHandle = true;
+    handle.userData.raceLinePointIndex = index;
+    builderRaceLineHandleRoot.add(handle);
+    return handle;
+  });
+}
+
+function builderRaceLineLaunchPoint() {
+  const launchType = builderGameMode === 'relay-race' ? 'relay-podium-gate' : 'podium';
+  const launchPoints = builderPropObjects.filter((object) => object.userData.propType === launchType).flatMap((object) => {
+    object.updateWorldMatrix(true, true);
+    const bounds = new THREE.Box3().setFromObject(object);
+    if (bounds.isEmpty()) return [];
+    return [new THREE.Vector3(
+      (bounds.min.x + bounds.max.x) / 2,
+      bounds.max.y + 0.68,
+      (bounds.min.z + bounds.max.z) / 2,
+    )];
+  });
+  if (!launchPoints.length) return null;
+  return launchPoints.reduce((center, point) => center.add(point), new THREE.Vector3())
+    .multiplyScalar(1 / launchPoints.length);
+}
+
+function builderRaceLineGatePlaneObstacles() {
+  return customGateObjects.flatMap((object) => {
+    const data = object.userData.gateData;
+    const planes = object.userData.gatePassPlanes || [];
+    object.updateWorldMatrix(true, false);
+    return planes.map((plane, openingIndex) => {
+      const center = plane.point.clone().applyMatrix4(object.matrixWorld);
+      const widthEdge = plane.point.clone().addScaledVector(plane.widthAxis, plane.width / 2).applyMatrix4(object.matrixWorld);
+      const heightEdge = plane.point.clone().addScaledVector(plane.heightAxis, plane.height / 2).applyMatrix4(object.matrixWorld);
+      const widthOffset = widthEdge.sub(center);
+      const heightOffset = heightEdge.sub(center);
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(object.matrixWorld);
+      return {
+        key: `${data.id}:${openingIndex}`,
+        direction: data.entryDirections?.[openingIndex] ?? data.entryDirection ?? 1,
+        center,
+        normal: plane.normal.clone().applyMatrix3(normalMatrix).normalize(),
+        widthAxis: widthOffset.clone().normalize(),
+        heightAxis: heightOffset.clone().normalize(),
+        halfWidth: widthOffset.length(),
+        halfHeight: heightOffset.length(),
+        clearance: 1.35,
+      };
+    });
+  });
+}
+
+function builderRaceLinePlaneCrossing(start, end, obstacle) {
+  const startDistance = start.clone().sub(obstacle.center).dot(obstacle.normal);
+  const endDistance = end.clone().sub(obstacle.center).dot(obstacle.normal);
+  if (startDistance * endDistance >= -1e-6) return null;
+  const amount = startDistance / (startDistance - endDistance);
+  if (amount <= 1e-4 || amount >= 1 - 1e-4) return null;
+  const crossing = start.clone().lerp(end, amount).sub(obstacle.center);
+  const widthOffset = crossing.dot(obstacle.widthAxis);
+  const heightOffset = crossing.dot(obstacle.heightAxis);
+  if (Math.abs(widthOffset) > obstacle.halfWidth + obstacle.clearance
+    || Math.abs(heightOffset) > obstacle.halfHeight + obstacle.clearance) return null;
+  return { widthOffset, heightOffset };
+}
+
+function builderRaceLinePointInsideGatePlane(point, obstacle) {
+  const relative = point.clone().sub(obstacle.center);
+  if (Math.abs(relative.dot(obstacle.normal)) > 0.25) return false;
+  return Math.abs(relative.dot(obstacle.widthAxis)) <= obstacle.halfWidth + obstacle.clearance
+    && Math.abs(relative.dot(obstacle.heightAxis)) <= obstacle.halfHeight + obstacle.clearance;
+}
+
+function builderRaceLineDetourPoint(start, end, obstacle, crossing, obstacles = []) {
+  const clamp = (value, limit) => THREE.MathUtils.clamp(value, -limit, limit);
+  const candidates = [];
+  for (const extraClearance of [0, 1.5, 3, 6]) {
+    const outerWidth = obstacle.halfWidth + obstacle.clearance + 0.65 + extraClearance;
+    const outerHeight = obstacle.halfHeight + obstacle.clearance + 0.65 + extraClearance;
+    candidates.push(...[
+      [outerWidth, clamp(crossing.heightOffset, outerHeight)],
+      [-outerWidth, clamp(crossing.heightOffset, outerHeight)],
+      [clamp(crossing.widthOffset, outerWidth), outerHeight],
+      [clamp(crossing.widthOffset, outerWidth), -outerHeight],
+    ].map(([widthOffset, heightOffset]) => obstacle.center.clone()
+      .addScaledVector(obstacle.widthAxis, widthOffset)
+      .addScaledVector(obstacle.heightAxis, heightOffset)));
+  }
+  const safeCandidates = candidates.filter((candidate) => obstacles.every((other) => other.key === obstacle.key
+    || !builderRaceLinePointInsideGatePlane(candidate, other)));
+  return (safeCandidates.length ? safeCandidates : candidates)
+    .sort((a, b) => start.distanceTo(a) + a.distanceTo(end) - start.distanceTo(b) - b.distanceTo(end))[0];
+}
+
+function routeBuilderRaceLineAroundPlanes(points, obstacles, skippedPlaneKey = null) {
+  const routed = points.map((point) => point.clone());
+  const maxInsertions = Math.max(8, obstacles.length * Math.max(4, points.length * 2));
+  let insertions = 0;
+  while (insertions < maxInsertions) {
+    let inserted = false;
+    for (let pointIndex = 0; pointIndex < routed.length && !inserted; pointIndex += 1) {
+      for (const obstacle of obstacles) {
+        if (obstacle.key === skippedPlaneKey || !builderRaceLinePointInsideGatePlane(routed[pointIndex], obstacle)) continue;
+        const relative = routed[pointIndex].clone().sub(obstacle.center);
+        routed[pointIndex] = builderRaceLineDetourPoint(routed[pointIndex], routed[pointIndex], obstacle, {
+          widthOffset: relative.dot(obstacle.widthAxis),
+          heightOffset: relative.dot(obstacle.heightAxis),
+        }, obstacles);
+        insertions += 1;
+        inserted = true;
+        break;
+      }
+    }
+    for (let pointIndex = 0; pointIndex < routed.length - 1 && !inserted; pointIndex += 1) {
+      for (const obstacle of obstacles) {
+        if (obstacle.key === skippedPlaneKey) continue;
+        const crossing = builderRaceLinePlaneCrossing(routed[pointIndex], routed[pointIndex + 1], obstacle);
+        if (!crossing) continue;
+        routed.splice(pointIndex + 1, 0, builderRaceLineDetourPoint(
+          routed[pointIndex], routed[pointIndex + 1], obstacle, crossing, obstacles,
+        ));
+        insertions += 1;
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) break;
+  }
+  return routed;
+}
+
+function builderRaceLineCurveIsClear(curve, obstacles, skippedPlaneKey = null) {
+  const sampleCount = THREE.MathUtils.clamp(Math.ceil(curve.getLength() * 2), 24, 960);
+  let previous = curve.getPoint(0);
+  if (obstacles.some((obstacle) => obstacle.key !== skippedPlaneKey
+    && builderRaceLinePointInsideGatePlane(previous, obstacle))) return false;
+  for (let sample = 1; sample <= sampleCount; sample += 1) {
+    const current = curve.getPoint(sample / sampleCount);
+    for (const obstacle of obstacles) {
+      if (obstacle.key === skippedPlaneKey) continue;
+      if (builderRaceLinePointInsideGatePlane(current, obstacle)
+        || builderRaceLinePlaneCrossing(previous, current, obstacle)) return false;
+    }
+    previous = current;
+  }
+  return true;
+}
+
+function builderRaceLineNearbyPlanes(points, obstacles) {
+  const bounds = new THREE.Box3().setFromPoints(points).expandByScalar(4);
+  return obstacles.filter((obstacle) => {
+    const gateRadius = Math.hypot(obstacle.halfWidth, obstacle.halfHeight) + obstacle.clearance;
+    return bounds.distanceToPoint(obstacle.center) <= gateRadius;
+  });
+}
+
+function builderRaceLineCurveCrossesPlaneCorrectly(curve, obstacle) {
+  if (obstacle.direction === 0) return false;
+  const sampleCount = THREE.MathUtils.clamp(Math.ceil(curve.getLength() * 2), 24, 960);
+  let previous = curve.getPoint(0);
+  let crossingCount = 0;
+  for (let sample = 1; sample <= sampleCount; sample += 1) {
+    const current = curve.getPoint(sample / sampleCount);
+    if (builderRaceLinePlaneCrossing(previous, current, obstacle)) {
+      const previousDistance = previous.clone().sub(obstacle.center).dot(obstacle.normal);
+      const currentDistance = current.clone().sub(obstacle.center).dot(obstacle.normal);
+      const correctDirection = obstacle.direction === 1
+        ? previousDistance > 0 && currentDistance < 0
+        : previousDistance < 0 && currentDistance > 0;
+      if (!correctDirection || ++crossingCount > 1) return false;
+    }
+    previous = current;
+  }
+  return true;
+}
+
+function refreshBuilderRaceLineGeometry() {
+  clearRaceLineGroup(builderRaceLinePathRoot);
+  builderRaceLineRoot.visible = currentPage === 'builder' && !flying && builderRaceLineGenerated;
+  if (!builderRaceLineGenerated || builderRaceLinePoints.length < 3) return;
+
+  const obstacles = builderRaceLineGatePlaneObstacles();
+  const addPath = (points, isMainRoute = false, skippedPlaneKey = null) => {
+    if (points.length < 2) return;
+    let curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
+    const nearbyObstacles = points.length > 2 ? builderRaceLineNearbyPlanes(points, obstacles) : [];
+    const skippedPlane = nearbyObstacles.find((obstacle) => obstacle.key === skippedPlaneKey);
+    const planeCrossingIsValid = !skippedPlane || builderRaceLineCurveCrossesPlaneCorrectly(curve, skippedPlane);
+    if (!planeCrossingIsValid || !builderRaceLineCurveIsClear(curve, nearbyObstacles, skippedPlaneKey)) {
+      const linearPath = new THREE.CurvePath();
+      for (let index = 0; index < points.length - 1; index += 1) {
+        linearPath.add(new THREE.LineCurve3(points[index], points[index + 1]));
+      }
+      curve = linearPath;
+    }
+    const segments = THREE.MathUtils.clamp(Math.ceil(curve.getLength() / 1.35), 24, 960);
+    addBuilderRaceLineTube(curve, isMainRoute ? 0.38 : 0.3, 0x39ffd0, 0.18, segments);
+    addBuilderRaceLineTube(curve, isMainRoute ? 0.13 : 0.1, 0xb5fff0, 0.66, segments);
+  };
+
+  const firstApproach = builderRaceLinePoints[0];
+  const launch = builderRaceLineLaunchPoint();
+  if (launch) {
+    const rise = Math.max(1.5, Math.min(4, launch.distanceTo(firstApproach) * 0.06));
+    const curvePoint = launch.clone().lerp(firstApproach, 0.38).add(new THREE.Vector3(0, rise, 0));
+    addPath(routeBuilderRaceLineAroundPlanes([launch, curvePoint, firstApproach], obstacles));
+  }
+  for (let gateIndex = 0; gateIndex < builderRaceLinePoints.length / 3; gateIndex += 1) {
+    const pointIndex = gateIndex * 3;
+    const gateRef = builderRaceLineGateRefs[gateIndex];
+    const targetPlaneKey = gateRef ? `${gateRef.gateId}:${gateRef.openingIndex}` : null;
+    const targetPlane = obstacles.find((obstacle) => obstacle.key === targetPlaneKey);
+    const startDistance = targetPlane
+      ? builderRaceLinePoints[pointIndex].clone().sub(targetPlane.center).dot(targetPlane.normal)
+      : 0;
+    const endDistance = targetPlane
+      ? builderRaceLinePoints[pointIndex + 2].clone().sub(targetPlane.center).dot(targetPlane.normal)
+      : 0;
+    const crossesInGreenDirection = targetPlane?.direction === 1
+      ? startDistance > 0 && endDistance < 0
+      : targetPlane?.direction === -1 && startDistance < 0 && endDistance > 0;
+    const allowedPlaneKey = crossesInGreenDirection ? targetPlaneKey : null;
+    addPath(routeBuilderRaceLineAroundPlanes(
+      builderRaceLinePoints.slice(pointIndex, pointIndex + 3),
+      obstacles,
+      allowedPlaneKey,
+    ), true, allowedPlaneKey);
+    if (gateIndex >= builderRaceLinePoints.length / 3 - 1) continue;
+    addPath(routeBuilderRaceLineAroundPlanes([
+      builderRaceLinePoints[pointIndex + 2],
+      builderRaceLinePoints[pointIndex + 3],
+    ], obstacles), true);
+  }
+  builderRaceLineHandles.forEach((handle, index) => handle.position.copy(builderRaceLinePoints[index]));
+}
+
+function generateBuilderRaceLine() {
+  const route = orderedBuilderGates().map((slot) => {
+    const object = customGateObjects.find((candidate) => candidate.userData.gateId === slot.gate.id);
+    if (!object) return null;
+    object.updateWorldMatrix(true, false);
+    const firstGreenOpening = slot.gate.entryDirections?.findIndex((direction) => direction !== 0) ?? -1;
+    const openingIndex = slot.openingIndex ?? (firstGreenOpening >= 0 ? firstGreenOpening : 0);
+    const plane = object.userData.gatePassPlanes?.[openingIndex] || object.userData.gatePassPlanes?.[0];
+    if (!plane) return null;
+
+    const center = plane.point.clone().applyMatrix4(object.matrixWorld);
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(object.matrixWorld);
+    const normal = plane.normal.clone().applyMatrix3(normalMatrix).normalize();
+    const direction = slot.gate.entryDirections?.[openingIndex] ?? slot.gate.entryDirection ?? 1;
+    const travelDirection = normal.multiplyScalar(direction === -1 ? 1 : -1);
+    const widthEdge = plane.point.clone().addScaledVector(plane.widthAxis, plane.width).applyMatrix4(object.matrixWorld);
+    const heightEdge = plane.point.clone().addScaledVector(plane.heightAxis, plane.height).applyMatrix4(object.matrixWorld);
+    const lead = THREE.MathUtils.clamp(Math.min(center.distanceTo(widthEdge), center.distanceTo(heightEdge)) * 0.46, 3, 8);
+    return {
+      gateId: slot.gate.id,
+      openingIndex,
+      center,
+      approach: center.clone().addScaledVector(travelDirection, -lead),
+      exit: center.clone().addScaledVector(travelDirection, lead),
+    };
+  }).filter(Boolean);
+
+  if (!route.length) {
+    showToast('Place and number the track gates before generating a race line.');
+    return;
+  }
+  detachBuilderPropTransform();
+  clearBuilderRaceLine();
+  builderRaceLineGateRefs = route.map(({ gateId, openingIndex }) => ({ gateId, openingIndex }));
+  selectedGateId = null;
+  selectedBuilderPropId = null;
+  selectedEnvironmentBuildingId = null;
+  builderSelectionHelper.visible = false;
+  document.querySelectorAll('[data-gate-type], [data-builder-prop]').forEach((button) => button.classList.remove('is-selected'));
+  route.forEach((gate) => builderRaceLinePoints.push(gate.approach, gate.center, gate.exit));
+  builderRaceLineGenerated = true;
+  rebuildBuilderRaceLineHandles();
+  document.querySelector('#builderPlacementStatus').textContent = 'RACE LINE / SELECT A POINT TO MOVE';
+  invalidateBuilderTrackPicture();
+  updateBuilderDisplay();
+  showToast('Race line generated. Click a glowing point to move that part of the route.');
+}
+
 function setBuilderGateRouteNumber(selected, requestedNumber, openingIndex = null) {
   const slots = builderGateRouteSlots();
   const selectedSlot = slots.find((slot) => slot.gate.id === selected.id && slot.openingIndex === openingIndex)
@@ -10927,6 +12891,7 @@ function updateBuilderDisplay() {
   const relayMode = builderGameMode === 'relay-race';
   const podiumCount = relayMode ? builderRelayPodiumGateCount() : builderPodiumCount();
   const routeSlots = builderGateRouteSlots();
+  updateBuilderRelayPodiumGateIndicators();
   const hasStartFinish = routeSlots.some((slot) => slot.isStartFinish);
   const countedGateCount = routeSlots.filter((slot) => slot.isStartFinish || slot.routeOrder > 0).length;
   document.querySelector('#gateCount').textContent = `${String(countedGateCount).padStart(2, '0')} GATES / ${String(builderProps.length).padStart(2, '0')} OBJECTS`;
@@ -10947,23 +12912,24 @@ function updateBuilderDisplay() {
   const startFinishInput = document.querySelector('#gateStartFinish');
   const startFinishControl = startFinishInput.closest('.builder-role-toggle');
   routeNumberControl.hidden = !selected || selectedGateOpeningIndex === null;
+  const selectedHasMultipleOpenings = selected && builderGateRouteOpeningCount(selected) > 1;
   const selectedRouteSlot = routeSlots.find((slot) => slot.gate.id === selected?.id
-    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+    && slot.openingIndex === (selectedHasMultipleOpenings ? selectedGateOpeningIndex : null));
   const selectedRouteOrder = selectedRouteSlot?.routeOrder ?? Number(selected?.routeOrder) ?? 0;
   const selectedIsStartFinish = Boolean(selectedRouteSlot?.isStartFinish ?? selected?.isStartFinish);
   const numberedGateCount = routeSlots.filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length;
   routeNumberInput.max = String(Math.max(1, numberedGateCount + (selected && selectedRouteOrder === 0 && !selectedIsStartFinish ? 1 : 0)));
   const selectedDirection = selected?.entryDirections?.[selectedGateOpeningIndex ?? 0] ?? selected?.entryDirection ?? 1;
   routeNumberInput.disabled = !selected || selectedIsStartFinish || !selectedRouteSlot || selectedDirection === 0;
-  routeNumberLabel.textContent = selected?.type === 'neon-dive' && selectedGateOpeningIndex !== null
-    ? `ENTRANCE ${selectedGateOpeningIndex + 1} ROUTE NUMBER (0 = N/A)`
+  routeNumberLabel.textContent = selectedHasMultipleOpenings && selectedGateOpeningIndex !== null
+    ? `${builderGateOpeningLabel(selected, selectedGateOpeningIndex).toUpperCase()} ROUTE NUMBER (0 = N/A)`
     : 'ROUTE NUMBER (0 = N/A)';
   startFinishControl.hidden = !selected || selectedGateOpeningIndex === null;
   startFinishInput.disabled = !selectedRouteSlot;
   startFinishInput.checked = selectedIsStartFinish;
   const startFinishText = startFinishControl.querySelector('b');
-  startFinishText.textContent = selected?.type === 'neon-dive' && selectedGateOpeningIndex !== null
-    ? `ENTRANCE ${selectedGateOpeningIndex + 1} / START + FINISH`
+  startFinishText.textContent = selectedHasMultipleOpenings && selectedGateOpeningIndex !== null
+    ? `${builderGateOpeningLabel(selected, selectedGateOpeningIndex).toUpperCase()} / START + FINISH`
     : 'START / FINISH';
   const selectedProp = builderProps.find((prop) => prop.id === selectedBuilderPropId);
   const selectedEnvironmentBuilding = builderEnvironmentBuildings.find((item) => item.id === selectedEnvironmentBuildingId);
@@ -10977,8 +12943,8 @@ function updateBuilderDisplay() {
     document.querySelector('#selectedPropName').textContent = selectedEnvironmentBuilding.label;
   }
   if (selected) {
-    const selectedGatePrefix = selected.type === 'neon-dive' && selectedGateOpeningIndex !== null
-      ? `${gateTypes[selected.type].name} / Entrance ${selectedGateOpeningIndex + 1}`
+    const selectedGatePrefix = selectedHasMultipleOpenings && selectedGateOpeningIndex !== null
+      ? `${gateTypes[selected.type].name} / ${builderGateOpeningLabel(selected, selectedGateOpeningIndex)}`
       : gateTypes[selected.type].name;
     document.querySelector('#selectedGateName').textContent = selectedIsStartFinish
       ? `${selectedGatePrefix} / Start + Finish`
@@ -10988,6 +12954,8 @@ function updateBuilderDisplay() {
     routeNumberInput.value = selectedIsStartFinish ? '' : String(selectedRouteOrder);
     document.querySelector('#gateColor').value = selected.color;
   }
+  refreshBuilderRaceLineGeometry();
+  document.querySelector('#deleteBuilderRaceLine').disabled = !builderRaceLineGenerated;
   updateBuilderPublishState();
 }
 
@@ -11027,7 +12995,7 @@ function setBuilderCamera(distanceMultiplier = 1) {
 const builderTransformToolbar = document.querySelector('#builderTransformToolbar');
 
 function syncBuilderTransformToolbar() {
-  const active = currentPage === 'builder' && !flying && Boolean(selectedBuilderPropId || selectedGateId || selectedEnvironmentBuildingId);
+  const active = currentPage === 'builder' && !flying && Boolean(selectedBuilderPropId || selectedGateId || selectedEnvironmentBuildingId || selectedBuilderRaceLinePointIndex !== null);
   builderTransformControls.enabled = active;
   builderTransformHelper.visible = active;
   builderTransformToolbar.hidden = !active;
@@ -11058,11 +13026,47 @@ function attachBuilderPropTransform(object) {
 }
 
 function detachBuilderPropTransform() {
+  selectedBuilderRaceLinePointIndex = null;
+  builderRaceLineHandles.forEach((handle, index) => handle.material.color.setHex(index % 3 === 1 ? 0x70ff9a : 0x73f6ff));
   builderTransformControls.detach();
   builderTransformHelper.visible = false;
   builderTransformToolbar.hidden = true;
   builderTransformControls.enabled = false;
 }
+
+function selectBuilderRaceLinePoint(pointIndex) {
+  const handle = builderRaceLineHandles[pointIndex];
+  if (!handle) return;
+  detachBuilderPropTransform();
+  selectedGateId = null;
+  selectedBuilderPropId = null;
+  selectedEnvironmentBuildingId = null;
+  selectedBuilderRaceLinePointIndex = pointIndex;
+  gatePlacementArmed = false;
+  builderSelectionHelper.visible = false;
+  builderGhostRoot.visible = false;
+  document.querySelectorAll('[data-gate-type], [data-builder-prop]').forEach((button) => button.classList.remove('is-selected'));
+  builderRaceLineHandles.forEach((item, index) => item.material.color.setHex(index === pointIndex ? 0xffcf78 : index % 3 === 1 ? 0x70ff9a : 0x73f6ff));
+  builderTransformControls.attach(handle);
+  builderTransformControls.setMode(builderTransformMode);
+  builderTransformControls.setSpace(builderTransformSpace);
+  setBuilderTransformAxis(builderTransformAxis);
+  document.querySelector('#builderPlacementStatus').textContent = `EDIT / RACE LINE POINT ${pointIndex + 1}`;
+  syncBuilderTransformToolbar();
+  updateBuilderDisplay();
+}
+
+renderer.domElement.addEventListener('wheel', (event) => {
+  if (currentPage !== 'builder' || flying || event.ctrlKey || event.metaKey
+    || !gatePlacementArmed || !builderGhostRoot.visible) return;
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1);
+  if (!delta) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const rotationDelta = THREE.MathUtils.clamp(delta / 100, -4, 4) * Math.PI / 12;
+  const rotateYaw = (yaw) => THREE.MathUtils.euclideanModulo(yaw + rotationDelta, Math.PI * 2);
+  builderGhostRoot.rotation.y = rotateYaw(builderGhostRoot.rotation.y);
+}, { capture: true, passive: false });
 
 builderTransformToolbar.querySelectorAll('[data-transform-mode]').forEach((button) => button.addEventListener('click', () => {
   builderTransformMode = button.dataset.transformMode;
@@ -11079,7 +13083,7 @@ builderTransformToolbar.querySelectorAll('[data-transform-space]').forEach((butt
 }));
 
 window.addEventListener('keydown', (event) => {
-  if (currentPage !== 'builder' || !(selectedBuilderPropId || selectedGateId || selectedEnvironmentBuildingId) || flying) return;
+  if (currentPage !== 'builder' || !(selectedBuilderPropId || selectedGateId || selectedEnvironmentBuildingId || selectedBuilderRaceLinePointIndex !== null) || flying) return;
   const typing = event.target instanceof Element && event.target.closest('input, select, textarea, [contenteditable="true"]');
   if (typing || event.altKey || event.ctrlKey || event.metaKey) return;
   const mode = { KeyG: 'translate', KeyR: 'rotate' }[event.code];
@@ -11180,6 +13184,11 @@ function selectEnvironmentBuilding(id) {
 function disposeBuilderVisual(root) {
   const sharedMaterialSet = new Set(Object.values(sharedMaterials));
   root.traverse((node) => {
+    if (node.userData.isGateModelStatusSign) {
+      node.material.map?.dispose();
+      node.material.dispose();
+      return;
+    }
     if (!node.isMesh) return;
     if (node.geometry && node.geometry !== boxGeometry) node.geometry.dispose();
     const materials = Array.isArray(node.material) ? node.material : [node.material];
@@ -11224,17 +13233,22 @@ function makeTransparentBuilderVisual(model) {
 function setBuilderGhost(asset) {
   clearBuilderGhost();
   if (!asset) return;
+  builderGhostRoot.rotation.set(0, 0, 0);
   const assetKey = `${asset.kind}:${asset.type}`;
   builderGhostAssetKey = assetKey;
   const palette = biomes[activeBiome]?.colors ?? ['cyan'];
   const gateHue = palette[builderGates.length % palette.length] || 'cyan';
-  const initialModel = asset.kind === 'gate' ? createProceduralGate(asset.type, gateHue) : createBuilderPropModel(asset.type);
-  builderGhostRoot.add(makeTransparentBuilderVisual(initialModel));
+  if (asset.kind === 'gate') builderGhostRoot.add(createGateModelStatusSign(asset.type));
+  else builderGhostRoot.add(makeTransparentBuilderVisual(createBuilderPropModel(asset.type)));
   if (asset.kind === 'gate') {
     loadGateModel(asset.type).then((source) => {
-      if (!source || builderGhostAssetKey !== assetKey || currentPage !== 'builder') return;
-      const old = builderGhostRoot.children[0];
-      if (old) { builderGhostRoot.remove(old); disposeBuilderVisual(old); }
+      if (builderGhostAssetKey !== assetKey || currentPage !== 'builder') return;
+      const statusSign = builderGhostRoot.children.find((child) => child.userData.isGateModelStatusSign);
+      if (!source) {
+        setGateModelStatusSignText(statusSign, 'GATE MODEL UNAVAILABLE');
+        return;
+      }
+      disposeGateModelStatusSign(statusSign);
       const model = cloneGateModel(source);
       applyGateLedColor(model, gateHue);
       builderGhostRoot.add(makeTransparentBuilderVisual(model));
@@ -11263,7 +13277,7 @@ function placeBuilderGate(position) {
     x,
     y: Math.round(builderSurfaceYAt(x, z) * 4) / 4,
     z,
-    rotation: 0,
+    rotation: THREE.MathUtils.euclideanModulo(THREE.MathUtils.radToDeg(builderGhostRoot.rotation.y), 360),
     scale: 1,
     rotationX: 0,
     rotationZ: 0,
@@ -11299,9 +13313,9 @@ function placeBuilderProp(position) {
     x,
     y: Math.round(builderSurfaceYAt(x, z) * 4) / 4,
     z,
-    rotation: 0,
+    rotation: THREE.MathUtils.euclideanModulo(THREE.MathUtils.radToDeg(builderGhostRoot.rotation.y), 360),
     rotationX: 0,
-    rotationY: 0,
+    rotationY: THREE.MathUtils.euclideanModulo(THREE.MathUtils.radToDeg(builderGhostRoot.rotation.y), 360),
     rotationZ: 0,
     scale: 1,
     scaleX: 1,
@@ -11449,6 +13463,12 @@ function setBuilderRayFromEvent(event) {
   return true;
 }
 
+function builderRaceLineHandleAtPointer(event) {
+  if (!builderRaceLineGenerated || !builderRaceLineRoot.visible || !setBuilderRayFromEvent(event)) return null;
+  const hits = builderRaycaster.intersectObjects(builderRaceLineHandles, false);
+  return hits[0]?.object || null;
+}
+
 function builderGateAtPointer(event) {
   if (!setBuilderRayFromEvent(event)) return null;
   const gateHits = builderRaycaster.intersectObjects(customGateObjects, true);
@@ -11565,18 +13585,27 @@ function builderGroundAtPointer(event) {
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (currentPage !== 'builder' || event.button !== 0) return;
   if (builderTransformControls.dragging) return;
-  if (builderGateAtPointer(event) || builderEnvironmentBuildingAtPointer(event) || builderPropAtPointer(event)) orbit.enabled = false;
+  if (builderRaceLineHandleAtPointer(event) || builderGateAtPointer(event) || builderEnvironmentBuildingAtPointer(event) || builderPropAtPointer(event)) orbit.enabled = false;
 }, { capture: true });
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (currentPage !== 'builder' || event.button !== 0) return;
   if (builderTransformControls.dragging) return;
+  const raceLineHandle = builderRaceLineHandleAtPointer(event);
+  if (raceLineHandle) {
+    selectBuilderRaceLinePoint(raceLineHandle.userData.raceLinePointIndex);
+    builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+    orbit.enabled = false;
+    renderer.domElement.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    return;
+  }
   const badgeGate = builderGateBadgeAtPointer(event);
   if (badgeGate) {
     const data = badgeGate.gate.userData.gateData;
     const openingIndex = badgeGate.openingIndex;
-    const isDive = data.type === 'neon-dive';
-    const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id && item.openingIndex === (isDive ? openingIndex : null));
+    const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
+    const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id && item.openingIndex === (hasMultipleOpenings ? openingIndex : null));
     if (slot && !slot.isStartFinish) {
       const numberedCount = builderGateRouteSlots().filter((item) => !item.isStartFinish && item.routeOrder > 0).length;
       const nextNumber = slot.routeOrder > 0 && slot.routeOrder < numberedCount
@@ -11600,7 +13629,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     const data = gate.userData.gateData;
     selectBuilderGate(data.id);
     selectedGateOpeningIndex = openingIndex ?? 0;
-    if (data.type === 'neon-dive') {
+    if (builderGateRouteOpeningCount(data) > 1) {
       const previousDirection = data.entryDirections[openingIndex] ?? 1;
       const nextDirection = previousDirection === 1 ? -1 : previousDirection === -1 ? 0 : 1;
       data.entryDirections[openingIndex] = nextDirection;
@@ -11679,7 +13708,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     return;
   }
-  if (!gatePlacementArmed && (selectedGateId || selectedBuilderPropId || selectedEnvironmentBuildingId)) {
+  if (!gatePlacementArmed && (selectedGateId || selectedBuilderPropId || selectedEnvironmentBuildingId || selectedBuilderRaceLinePointIndex !== null)) {
     detachBuilderPropTransform();
     selectedGateId = null;
     selectedBuilderPropId = null;
@@ -11797,30 +13826,27 @@ function updateSelectedGateFromInspector() {
   invalidateBuilderTrackPicture();
   const object = customGateObjects.find((item) => item.userData.gateId === gate.id);
   if (object) {
-    if (object.userData.loadedModel) {
-      applyGateLedColor(object, gate.color);
-    } else if (document.activeElement?.id === 'gateColor') {
-      clearChildren(object);
-      object.add(createProceduralGate(gate.type, gate.color));
-    }
+    if (object.userData.loadedModel) applyGateLedColor(object, gate.color);
     if (object.userData.gateId === selectedGateId) builderSelectionHelper.update();
   }
 }
 
 function updateSelectedGateRouteNumber() {
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
+  const hasMultipleOpenings = selected && builderGateRouteOpeningCount(selected) > 1;
   const selectedSlot = builderGateRouteSlots().find((slot) => slot.gate.id === selected?.id
-    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+    && slot.openingIndex === (hasMultipleOpenings ? selectedGateOpeningIndex : null));
   if (!selected || selectedSlot?.isStartFinish) return;
   const value = Number(document.querySelector('#gateRouteNumber').value);
   if (!Number.isSafeInteger(value) || value < 0) return;
-  setBuilderGateRouteNumber(selected, value, selected.type === 'neon-dive' ? selectedGateOpeningIndex : null);
+  setBuilderGateRouteNumber(selected, value, hasMultipleOpenings ? selectedGateOpeningIndex : null);
 }
 
 function updateSelectedGateStartFinish() {
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
+  const hasMultipleOpenings = selected && builderGateRouteOpeningCount(selected) > 1;
   const selectedSlot = builderGateRouteSlots().find((slot) => slot.gate.id === selected?.id
-    && slot.openingIndex === (selected?.type === 'neon-dive' ? selectedGateOpeningIndex : null));
+    && slot.openingIndex === (hasMultipleOpenings ? selectedGateOpeningIndex : null));
   if (!selected || !selectedSlot) return;
   if (!document.querySelector('#gateStartFinish').checked && selectedSlot.isStartFinish) {
     document.querySelector('#gateStartFinish').checked = true;
@@ -11931,6 +13957,7 @@ document.querySelector('#builderBiomeSelect').addEventListener('change', (event)
   builderProps = [];
   builderPropObjects = [];
   builderPlacementHistory = [];
+  clearBuilderRaceLine();
   selectedGateId = null;
   selectedBuilderPropId = null;
   selectedEnvironmentBuildingId = null;
@@ -12049,6 +14076,8 @@ function saveBuilder() {
     imageDataUrl: builderTrackPicture,
     gates: builderGates.map((gate) => ({ ...gate })),
     props: builderProps.map((prop) => ({ ...prop })),
+    raceLine: builderRaceLineGenerated ? builderRaceLinePoints.map((point) => point.toArray()) : null,
+    raceLineGateRefs: builderRaceLineGenerated ? builderRaceLineGateRefs.map((gateRef) => ({ ...gateRef })) : null,
   };
   if (existingIndex >= 0) tracks[existingIndex] = track;
   else tracks.push(track);
@@ -12145,8 +14174,12 @@ document.querySelector('#captureTrackPicture').addEventListener('click', () => {
   if (currentPage !== 'builder') return;
   const selectedHelperVisible = builderSelectionHelper.visible;
   const ghostVisible = builderGhostRoot.visible;
+  const transformVisible = builderTransformHelper.visible;
+  const lineHandlesVisible = builderRaceLineHandleRoot.visible;
   builderSelectionHelper.visible = false;
   builderGhostRoot.visible = false;
+  builderTransformHelper.visible = false;
+  builderRaceLineHandleRoot.visible = false;
   let picture = '';
   try {
     composer.render();
@@ -12156,6 +14189,8 @@ document.querySelector('#captureTrackPicture').addEventListener('click', () => {
   } finally {
     builderSelectionHelper.visible = selectedHelperVisible;
     builderGhostRoot.visible = ghostVisible;
+    builderTransformHelper.visible = transformVisible;
+    builderRaceLineHandleRoot.visible = lineHandlesVisible;
     try { composer.render(); } catch { /* The next animation frame will redraw the scene. */ }
   }
   if (!picture) return;
@@ -12200,6 +14235,10 @@ document.querySelector('#publishCommunityTrack').addEventListener('click', async
         gateEntryDirections: uploadGates.map((slot) => slot.openingIndex !== null
           ? [slot.entryDirections?.[slot.openingIndex] ?? 1]
           : Array.isArray(slot.entryDirections) ? [...slot.entryDirections] : [slot.entryDirection === -1 ? -1 : 1]),
+        gateTypes: uploadGates.map((slot) => slot.gate.type),
+        gateColors: uploadGates.map((slot) => slot.gate.color || 'cyan'),
+        gateIds: uploadGates.map((slot) => slot.gate.id),
+        gateOpeningIndices: uploadGates.map((slot) => slot.openingIndex ?? -1),
         gateRotationsX: uploadGates.map((slot) => slot.rotationX || 0),
         gateRotationsZ: uploadGates.map((slot) => slot.rotationZ || 0),
         gateScales: uploadGates.map((slot) => slot.scale || 1),
@@ -12241,6 +14280,23 @@ document.querySelector('#publishCommunityTrack').addEventListener('click', async
 });
 
 function restoreBuilder(savedTrack = null) {
+  clearBuilderRaceLine();
+  if (Array.isArray(savedTrack?.raceLine)) {
+    builderRaceLinePoints = savedTrack.raceLine.slice(0, 240).flatMap((point) => {
+      if (!Array.isArray(point) || point.length < 3) return [];
+      const coordinates = point.slice(0, 3).map(Number);
+      if (!coordinates.every((value) => Number.isFinite(value) && Math.abs(value) <= 1000)) return [];
+      return [new THREE.Vector3(...coordinates)];
+    });
+    builderRaceLineGenerated = builderRaceLinePoints.length >= 3 && builderRaceLinePoints.length % 3 === 0;
+    if (builderRaceLineGenerated) rebuildBuilderRaceLineHandles();
+    else builderRaceLinePoints = [];
+  }
+  if (builderRaceLineGenerated && Array.isArray(savedTrack?.raceLineGateRefs)) {
+    builderRaceLineGateRefs = savedTrack.raceLineGateRefs.slice(0, builderRaceLinePoints.length / 3)
+      .filter((gateRef) => typeof gateRef?.gateId === 'string' && Number.isInteger(gateRef.openingIndex) && gateRef.openingIndex >= 0)
+      .map((gateRef) => ({ gateId: gateRef.gateId, openingIndex: gateRef.openingIndex }));
+  }
   builderPlacementHistory = [];
   let saved = [];
   if (savedTrack) {
@@ -12314,6 +14370,10 @@ function restoreBuilder(savedTrack = null) {
   });
   customGateObjects = builderGates.map((gate) => createBuilderGate(gate));
   normalizeBuilderGateSequence();
+  if (builderRaceLineGenerated && !builderRaceLineGateRefs.length) {
+    builderRaceLineGateRefs = orderedBuilderGates().slice(0, builderRaceLinePoints.length / 3)
+      .map((slot) => ({ gateId: slot.gate.id, openingIndex: slot.openingIndex ?? 0 }));
+  }
   builderPlacementHistory = builderGates.map((gate) => ({ kind: 'gate', id: gate.id }));
   updateBuilderDisplay();
 }
@@ -12414,7 +14474,7 @@ function setCameraFov(value) {
 }
 
 function setCameraAngle(value) {
-  cameraAngle = THREE.MathUtils.clamp(Number(value) || 22, 5, 45);
+  cameraAngle = THREE.MathUtils.clamp(Number(value) || 22, 5, 60);
   angleRange.value = String(cameraAngle);
   flightAngleRange.value = String(cameraAngle);
   document.querySelector('#angleValue').textContent = `${cameraAngle}°`;
@@ -12490,8 +14550,12 @@ function setSwitch(button, value) {
   button.querySelector('span').textContent = value ? 'ON' : 'OFF';
 }
 setSwitch(soundToggle, soundEnabled);
+setSwitch(document.querySelector('#lobbyMusicToggle'), lobbyMusicEnabled);
 setSwitch(document.querySelector('#hudToggle'), hudEnabled);
+setSwitch(document.querySelector('#reticleToggle'), reticleEnabled);
+setSwitch(document.querySelector('#gameChatToggle'), gameChatEnabled);
 setSwitch(document.querySelector('#vignetteToggle'), vignetteEnabled);
+hud.classList.toggle('reticle-hidden', !reticleEnabled);
 soundToggle.addEventListener('click', async (event) => {
   const nextValue = !soundEnabled;
   try {
@@ -12514,15 +14578,26 @@ audioVolumeRange.addEventListener('input', () => {
   audioVolume = Number(audioVolumeRange.value) / 100;
   audioVolumeValue.textContent = `${audioVolumeRange.value}%`;
   updateMotorAudio({ pitch: 0, roll: 0 });
+  updateLobbyMusicVolume();
+  saveSettings();
+});
+document.querySelector('#lobbyMusicToggle').addEventListener('click', (event) => {
+  lobbyMusicEnabled = !lobbyMusicEnabled;
+  setSwitch(event.currentTarget, lobbyMusicEnabled);
+  syncLobbyMusic();
   saveSettings();
 });
 document.querySelector('#resetAudioSettings').addEventListener('click', () => {
   soundEnabled = false;
+  lobbyMusicEnabled = true;
   audioVolume = 1;
   audioVolumeRange.value = '100';
   audioVolumeValue.textContent = '100%';
   setSwitch(soundToggle, false);
+  setSwitch(document.querySelector('#lobbyMusicToggle'), true);
   updateMotorAudio({ pitch: 0, roll: 0 });
+  stopLobbyMusic();
+  syncLobbyMusic();
   saveSettings();
   showToast('Audio settings reset to defaults.');
 });
@@ -12530,6 +14605,19 @@ document.querySelector('#hudToggle').addEventListener('click', (event) => {
   hudEnabled = !hudEnabled;
   setSwitch(event.currentTarget, hudEnabled);
   hud.classList.toggle('is-hidden', !hudEnabled);
+  saveSettings();
+});
+document.querySelector('#reticleToggle').addEventListener('click', (event) => {
+  reticleEnabled = !reticleEnabled;
+  setSwitch(event.currentTarget, reticleEnabled);
+  hud.classList.toggle('reticle-hidden', !reticleEnabled);
+  saveSettings();
+});
+document.querySelector('#gameChatToggle').addEventListener('click', (event) => {
+  gameChatEnabled = !gameChatEnabled;
+  setSwitch(event.currentTarget, gameChatEnabled);
+  updateGameChatUI();
+  if (gameChatEnabled) void refreshGameChat();
   saveSettings();
 });
 document.querySelector('#vignetteToggle').addEventListener('click', (event) => {
@@ -12557,13 +14645,18 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   applyDronePropColor(dronePropColor);
   quality = 1.8;
   hudEnabled = true;
+  reticleEnabled = true;
+  gameChatEnabled = true;
   vignetteEnabled = true;
   Object.assign(flightTune, flightTuneDefaults);
   syncFlightTuneControls();
   renderRatePreview();
   setSwitch(document.querySelector('#hudToggle'), true);
+  setSwitch(document.querySelector('#reticleToggle'), true);
+  setSwitch(document.querySelector('#gameChatToggle'), true);
   setSwitch(document.querySelector('#vignetteToggle'), true);
-  hud.classList.remove('is-hidden', 'no-vignette');
+  hud.classList.remove('is-hidden', 'reticle-hidden', 'no-vignette');
+  updateGameChatUI();
   updateRenderResolution();
   camera.updateProjectionMatrix();
   if (qualityChanged) restartForRenderQuality();
@@ -12695,9 +14788,8 @@ function updateMotorAudio(controls) {
 }
 
 renderer.domElement.addEventListener('dblclick', () => {
-  if (flying) return;
-  if (currentPage === 'builder') setBuilderCamera(1.5);
-  else if (currentPage === 'trackPicker') setTrackOverviewCamera();
+  if (flying || currentPage === 'builder') return;
+  if (currentPage === 'trackPicker') setTrackOverviewCamera();
   else resetMenuCamera();
 });
 
@@ -12714,6 +14806,7 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.code === 'Escape' && flying) {
     event.preventDefault();
+    if (event.target instanceof Element && event.target.closest('#gameChat')) event.target.blur();
     if (currentPage === 'settings') {
       setPage(pageBeforeSettings);
     } else {
@@ -12774,6 +14867,7 @@ window.addEventListener('keydown', (event) => {
     else if (currentPage === 'builder') { selectedMode = 'Race'; enterFlight(); }
     return;
   }
+  if (isTypingInControl) return;
   if (flying && ['Space', 'KeyC', 'ArrowUp', 'ArrowDown'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
 });
@@ -13047,12 +15141,8 @@ function animate(now) {
     }
     if (menuBackdropRoot.visible) {
       if (menuStarTimeUniform) menuStarTimeUniform.value = now * 0.00042;
-      if (menuMoonGroup) {
-        menuMoonWorldOffset.copy(menuMoonLocalOffset).applyQuaternion(camera.quaternion);
-        menuMoonGroup.position.copy(camera.position).addScaledVector(menuMoonWorldOffset, 2200);
-        menuMoonGroup.quaternion.copy(camera.quaternion);
-      }
     }
+    updateLobbyMusicVisualization(dt);
     if (environmentRoot.visible && activeBiome === 'neon-docks') {
       const groundClearance = flying
         ? Math.max(0, flight.position.y - terrainSurfaceYAt(activeBiome, flight.position.x, flight.position.z))

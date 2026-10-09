@@ -286,7 +286,8 @@
                   <input id="serverBiomeSelect" type="hidden" value="neon-docks" />
                   <label class="server-field" for="serverTrackSelect"><span>TRACK</span><select id="serverTrackSelect" aria-label="Choose a server track"></select></label>
                 </div>
-                <label class="server-field" for="serverCapacity"><span>PILOT SLOTS</span><select id="serverCapacity"><option value="1">1 pilot</option><option value="2">2 pilots</option><option value="3">3 pilots</option><option value="4">4 pilots</option><option value="5">5 pilots</option><option value="6">6 pilots</option><option value="7">7 pilots</option><option value="8" selected>8 pilots</option></select></label>
+                <label class="server-field" for="serverCapacity"><span>PILOT SLOTS</span><select id="serverCapacity"><option value="2">2 pilots</option><option value="3">3 pilots</option><option value="4">4 pilots</option><option value="5">5 pilots</option><option value="6">6 pilots</option><option value="7">7 pilots</option><option value="8" selected>8 pilots</option></select></label>
+                <small id="serverMinPlayersHint" class="server-visibility-hint">At least 2 connected pilots must load in before the race starts.</small>
                 <small id="serverCapacityHint" class="server-visibility-hint" hidden>Relay is a full 8-pilot match with two teams of four.</small>
                 <div class="track-source-control"><span>TRACK LIBRARY</span><div role="group" aria-label="Choose track library"><button class="track-source-button is-selected" type="button" data-server-track-source="game" aria-pressed="true">IN-GAME</button><button class="track-source-button" type="button" data-server-track-source="community" aria-pressed="false">COMMUNITY</button></div></div>
                 <div id="customServerTrackSummary" class="custom-track-summary"><span class="custom-track-symbol">◎</span><span><small>SELECTED COURSE</small><strong>Choose a track</strong></span><b>READY</b></div>
@@ -341,7 +342,7 @@
               </section>
               <div class="builder-sidebar-foot"><span class="tiny-pip"></span><span id="builderSummary">0 custom gates placed</span></div>
             </aside>
-            <div class="builder-canvas-hud" aria-live="polite"><span class="builder-placement-pip"></span><span id="builderPlacementStatus">PLACE / SINGLE</span><small>CLICK PLACE · DRAG MOVE / ORBIT · RIGHT-DRAG PAN · SCROLL ZOOM · BACKSPACE DELETE · CTRL+C/V COPY · WASD/QE FREE MOVE</small></div>
+            <div class="builder-canvas-hud" aria-live="polite"><span class="builder-placement-pip"></span><span id="builderPlacementStatus">PLACE / SINGLE</span><small>CLICK PLACE · DRAG MOVE / ORBIT · RIGHT-DRAG PAN · SCROLL ROTATE PREVIEW · SCROLL ZOOM WHEN NOT PLACING · BACKSPACE DELETE · CTRL+C/V COPY · WASD/QE FREE MOVE</small></div>
             <div id="builderTransformToolbar" class="builder-transform-toolbar" aria-label="Object transform tools" hidden>
               <span class="builder-transform-title">TRANSFORM</span>
               <button type="button" data-transform-mode="translate" aria-label="Move object (G)">MOVE <kbd>G</kbd></button>
@@ -362,6 +363,7 @@
                   <div class="builder-section-heading"><span>TRACK SETTINGS</span></div>
                   <label class="builder-select-label" for="builderTrackName">TRACK NAME<input id="builderTrackName" type="text" maxlength="32" autocomplete="off" placeholder="My custom track" /></label>
                   <label class="builder-select-label" for="builderLapCount">LAPS<select id="builderLapCount"><option value="1">1 lap</option><option value="2">2 laps</option><option value="3">3 laps</option><option value="4">4 laps</option><option value="5">5 laps</option></select></label>
+                  <div class="builder-race-line-tools" aria-label="Race line controls"><div class="builder-race-line-actions"><button id="generateBuilderRaceLine" class="builder-race-line-button" type="button">GENERATE RACE LINE</button><button id="deleteBuilderRaceLine" class="builder-race-line-button is-delete" type="button" disabled>DELETE</button></div><small>Trace the green entrances. Click a glowing point, then drag its gizmo. Generate again to reset it.</small></div>
                   <div class="builder-saved-track-row">
                     <label class="builder-select-label" for="builderSavedTrackSelect">SAVED TRACKS<select id="builderSavedTrackSelect"><option value="">No saved tracks</option></select></label>
                     <button id="loadSavedBuilderTrack" class="builder-saved-track-action" type="button" disabled>LOAD</button>
@@ -416,22 +418,28 @@
               <button id="copySettingsPartyCode" type="button">COPY CODE</button>
             </section>
             <div class="settings-body">
-              <div class="settings-tabs" role="tablist" aria-label="Settings categories">
-                <button id="settingsControlsTab" class="settings-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="settingsControlsPanel" data-settings-tab="controls">
-                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9h12a3 3 0 0 1 2.9 3.7l-1 4a2.3 2.3 0 0 1-3.7 1.2L13 15.5h-2l-3.2 2.4a2.3 2.3 0 0 1-3.7-1.2l-1-4A3 3 0 0 1 6 9Z"/><path d="M7.5 11.5v4m-2-2h4m7-1h.1m2 2h.1"/></svg></span>
-                  <span class="settings-tab-copy"><strong>INPUT &amp; CONTROLS</strong></span><b class="settings-tab-index">01</b>
-                </button>
-                <button id="settingsTuneTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsTunePanel" data-settings-tab="tune">
-                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18V6m0 12h16M8 14l3-4 3 2 5-6"/><circle cx="8" cy="14" r="1"/><circle cx="11" cy="10" r="1"/><circle cx="14" cy="12" r="1"/></svg></span>
-                  <span class="settings-tab-copy"><strong>FLIGHT TUNE</strong></span><b class="settings-tab-index">02</b>
-                </button>
-                <button id="settingsCameraTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsCameraPanel" data-settings-tab="camera">
-                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 7.5h4l1.6-2h5.8l1.6 2h4v12h-17z"/><circle cx="12" cy="13.5" r="4"/><path d="M18 10h.1"/></svg></span>
-                  <span class="settings-tab-copy"><strong>CAMERA &amp; GRAPHICS</strong></span><b class="settings-tab-index">03</b>
-                </button>
-                <button id="settingsAudioTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsAudioPanel" data-settings-tab="audio">
-                  <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4h3l5 4V6l-5 4H4Z"/><path d="M16 9a5 5 0 0 1 0 6m2.5-8.5a8.5 8.5 0 0 1 0 11"/></svg></span>
-                  <span class="settings-tab-copy"><strong>AUDIO</strong></span><b class="settings-tab-index">04</b>
+              <div class="settings-navigation">
+                <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+                  <button id="settingsControlsTab" class="settings-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="settingsControlsPanel" data-settings-tab="controls">
+                    <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 9h12a3 3 0 0 1 2.9 3.7l-1 4a2.3 2.3 0 0 1-3.7 1.2L13 15.5h-2l-3.2 2.4a2.3 2.3 0 0 1-3.7-1.2l-1-4A3 3 0 0 1 6 9Z"/><path d="M7.5 11.5v4m-2-2h4m7-1h.1m2 2h.1"/></svg></span>
+                    <span class="settings-tab-copy"><strong>INPUT &amp; CONTROLS</strong></span><b class="settings-tab-index">01</b>
+                  </button>
+                  <button id="settingsTuneTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsTunePanel" data-settings-tab="tune">
+                    <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18V6m0 12h16M8 14l3-4 3 2 5-6"/><circle cx="8" cy="14" r="1"/><circle cx="11" cy="10" r="1"/><circle cx="14" cy="12" r="1"/></svg></span>
+                    <span class="settings-tab-copy"><strong>FLIGHT TUNE</strong></span><b class="settings-tab-index">02</b>
+                  </button>
+                  <button id="settingsCameraTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsCameraPanel" data-settings-tab="camera">
+                    <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 7.5h4l1.6-2h5.8l1.6 2h4v12h-17z"/><circle cx="12" cy="13.5" r="4"/><path d="M18 10h.1"/></svg></span>
+                    <span class="settings-tab-copy"><strong>CAMERA &amp; GRAPHICS</strong></span><b class="settings-tab-index">03</b>
+                  </button>
+                  <button id="settingsAudioTab" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsAudioPanel" data-settings-tab="audio">
+                    <span class="settings-tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4h3l5 4V6l-5 4H4Z"/><path d="M16 9a5 5 0 0 1 0 6m2.5-8.5a8.5 8.5 0 0 1 0 11"/></svg></span>
+                    <span class="settings-tab-copy"><strong>AUDIO</strong></span><b class="settings-tab-index">04</b>
+                  </button>
+                </div>
+                <button id="flightMainMenuButton" class="flight-main-menu-button" type="button" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-6v-7h-4v7H4a1 1 0 0 1-1-1z"/></svg>
+                  <span>MAIN MENU</span>
                 </button>
               </div>
               <div class="settings-content-area">
@@ -559,18 +567,24 @@
             <section id="settingsCameraPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsCameraTab" data-settings-content="camera" hidden>
               <div class="settings-list">
                 <label class="setting-row" for="fovRange"><span><strong>Camera field of view</strong><small>Wider view, more speed</small></span><input id="fovRange" type="range" min="85" max="130" value="108" /><output id="fovValue">108°</output></label>
-                <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="45" value="22" /><output id="angleValue">22°</output></label>
+                <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="60" value="22" /><output id="angleValue">22°</output></label>
                 <label class="setting-row" for="qualitySelect"><span><strong>Render quality</strong><small>Adjust resolution for your display</small></span><select id="qualitySelect"><option value="1">Performance</option><option value="1.35">Balanced</option><option value="1.8" selected>High</option></select></label>
                 <label class="setting-row" for="droneNeonColor"><span><strong>Drone LED color</strong><small>Glow color for the arms and LEDs</small></span><input id="droneNeonColor" type="color" value="#52e8ff" /><output id="droneNeonColorValue">#52E8FF</output></label>
                 <label class="setting-row" for="droneBodyColor"><span><strong>Drone center body</strong><small>Change the blue body panels; windshield stays black</small></span><input id="droneBodyColor" type="color" value="#45dfff" /><output id="droneBodyColorValue">#45DFFF</output></label>
                 <label class="setting-row" for="dronePropColor"><span><strong>Propeller color</strong><small>Color all four propellers</small></span><input id="dronePropColor" type="color" value="#45dfff" /><output id="dronePropColorValue">#45DFFF</output></label>
                 <div class="setting-row"><span><strong>Flight HUD</strong><small>Speed, altitude and throttle</small></span><button id="hudToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
+                <div class="setting-row"><span><strong>Center reticle</strong><small>Crosshair and dot while flying</small></span><button id="reticleToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
+                <div class="setting-row"><span><strong>In-game chat</strong><small>Show lobby and world messages</small></span><button id="gameChatToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
                 <div class="setting-row"><span><strong>Motion vignette</strong><small>Subtle edge shade while flying</small></span><button id="vignetteToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
               </div>
               <div class="settings-bottom"><span><span class="tiny-pip"></span> SAVED LOCALLY</span><button id="resetSettings" class="text-button" type="button">RESET DEFAULTS</button></div>
             </section>
             <section id="settingsAudioPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsAudioTab" data-settings-content="audio" hidden>
               <div class="settings-list">
+                <div class="setting-row">
+                  <span><strong>Lobby music</strong><small>Original music in the lobby and pre-flight menus</small></span>
+                  <button id="lobbyMusicToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button>
+                </div>
                 <div class="setting-row">
                   <span><strong>Flight &amp; menu audio</strong><small>Motors, gate tones and interface sounds</small></span>
                   <span></span>
@@ -606,8 +620,8 @@
 
       <section id="flightHud" class="flight-hud" hidden>
         <div class="hud-top"><button id="exitFlight" class="hud-back" type="button"><span>←</span> EXIT <kbd>ESC</kbd></button><div class="hud-center-tag"><span class="status-pip"></span> <span id="flightModeLabel">FREE FLIGHT</span></div><div class="hud-field-tag"><span>INPUT / <b id="flightInputLabel">KEYBOARD</b></span><span>FIELD / <b id="flightFieldLabel">NEON DOCKS</b></span></div></div>
-        <div id="courseProgress" class="course-progress" aria-live="polite" hidden><span id="courseProgressName">COURSE</span><b id="courseProgressCount">1 / 6</b></div>
-        <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b><small id="raceRestartHint" class="race-restart-hint" hidden>R / RESTART</small></div>
+        <div id="courseProgress" class="course-progress" aria-live="polite" hidden><b id="courseProgressCount">Lap: 1/1</b></div>
+        <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b></div>
         <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
         <aside id="relayRaceTiming" class="relay-race-timing" aria-label="Relay team splits and lap times" hidden><span class="race-leaderboard-heading">TEAM RELAY / LAP TIMES</span><div id="relayRaceTeams"></div></aside>
         <div id="raceStartOverlay" class="race-start-overlay" role="status" aria-live="assertive" hidden><span id="raceStartLabel">RACE STARTS IN</span><strong id="raceStartNumber">5</strong><small id="raceStartDetail">HOLD POSITION ON THE PODIUM</small></div>
@@ -617,12 +631,27 @@
         <div class="flight-bottom"><div class="flight-prompt"><span class="flight-bottom-dot"></span><span id="flightPrompt">NO CLOCK. FIND YOUR FLOW.</span></div><div class="flight-controls"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> PITCH / ROLL</span><span><kbd>Q</kbd><kbd>E</kbd> YAW</span><span><kbd>SPACE</kbd><kbd>C</kbd> THROTTLE</span></div><div class="hud-fps"><b id="fpsValue">60</b><span>FPS</span></div></div>
       </section>
 
+      <aside id="gameChat" class="game-chat" aria-label="In-game chat" hidden>
+        <header class="game-chat-header"><div><span class="game-chat-kicker"><i></i> PILOT COMMS</span><strong id="gameChatChannelTitle">WORLD CHAT</strong></div></header>
+        <nav class="game-chat-tabs" aria-label="Chat channel">
+          <button id="gameChatLobbyTab" type="button" aria-pressed="false">LOBBY</button>
+          <button id="gameChatWorldTab" type="button" aria-pressed="true">WORLD</button>
+        </nav>
+        <div id="gameChatMessages" class="game-chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+        <p id="gameChatStatus" class="game-chat-status" role="status"></p>
+        <form id="gameChatForm" class="game-chat-form">
+          <label class="sr-only" for="gameChatInput">Chat message</label>
+          <input id="gameChatInput" name="message" type="text" maxlength="240" autocomplete="off" placeholder="Message pilots…" />
+          <button id="gameChatSend" type="submit">SEND</button>
+        </form>
+      </aside>
+
       <div id="flightCameraQuickControls" class="flight-camera-quick-controls" hidden>
         <button id="flightCameraToggle" class="flight-camera-toggle" type="button" aria-expanded="false" aria-controls="flightCameraPanel">CAMERA SETTINGS</button>
         <section id="flightCameraPanel" class="flight-camera-panel" aria-label="Live camera settings" hidden>
           <header><strong>LIVE CAMERA</strong><small>CHANGES APPLY IMMEDIATELY</small></header>
           <label for="flightFovRange"><span>FIELD OF VIEW <output id="flightFovValue">108°</output></span><input id="flightFovRange" type="range" min="85" max="130" value="108" /></label>
-          <label for="flightAngleRange"><span>CAMERA ANGLE <output id="flightAngleValue">22°</output></span><input id="flightAngleRange" type="range" min="5" max="45" value="22" /></label>
+          <label for="flightAngleRange"><span>CAMERA ANGLE <output id="flightAngleValue">22°</output></span><input id="flightAngleRange" type="range" min="5" max="60" value="22" /></label>
         </section>
       </div>
 

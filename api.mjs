@@ -26,8 +26,9 @@ let challenges = new Map();
 let pendingAccountSetups = new Map();
 let rateWindows = new Map();
 let friendPresence = new Map();
+let localSaveQueue = Promise.resolve();
 const communityTrackGameModes = new Set(['4v4', 'relay-race', 'prop-hunt']);
-let store = { users: [], sessions: [], lobbies: [], friendships: [], friendRequests: [], teams: [], communityTracks: [] };
+let store = { users: [], sessions: [], lobbies: [], worldChat: [], friendships: [], friendRequests: [], teams: [], communityTracks: [] };
 
 function setting(name) {
   return runtimeEnvironment[name] ?? '';
@@ -37,7 +38,11 @@ function normalizeStore(saved = {}) {
   return {
     users: Array.isArray(saved.users) ? saved.users : [],
     sessions: Array.isArray(saved.sessions) ? saved.sessions.filter((session) => session.expiresAt > Date.now()) : [],
-    lobbies: Array.isArray(saved.lobbies) ? saved.lobbies : [],
+    lobbies: Array.isArray(saved.lobbies) ? saved.lobbies.map((lobby) => ({
+      ...lobby,
+      chatMessages: Array.isArray(lobby.chatMessages) ? lobby.chatMessages.slice(-80) : [],
+    })) : [],
+    worldChat: Array.isArray(saved.worldChat) ? saved.worldChat.slice(-120) : [],
     friendships: Array.isArray(saved.friendships) ? saved.friendships.filter((friendship) => Array.isArray(friendship.userIds) && friendship.userIds.length === 2) : [],
     friendRequests: Array.isArray(saved.friendRequests) ? saved.friendRequests.filter((request) => request.id && request.fromUserId && request.toUserId) : [],
     partyInvites: Array.isArray(saved.partyInvites) ? saved.partyInvites.filter((invite) => invite.id && invite.lobbyId && invite.fromUserId && invite.toUserId) : [],
@@ -87,9 +92,14 @@ async function saveStore() {
     await persistOverride(exportWorkerState());
     return;
   }
+  const serialized = JSON.stringify(store, null, 2);
   const temporaryFile = `${accountFile}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporaryFile, JSON.stringify(store, null, 2), { mode: 0o600 });
-  await rename(temporaryFile, accountFile);
+  const write = localSaveQueue.then(async () => {
+    await writeFile(temporaryFile, serialized, { mode: 0o600 });
+    await rename(temporaryFile, accountFile);
+  });
+  localSaveQueue = write.catch(() => undefined);
+  await write;
 }
 
 function json(response, status, payload, extraHeaders = {}) {
@@ -647,8 +657,21 @@ async function handleTeams(request, response, url) {
 
 const communityTrackBiomes = new Set(['neon-docks', 'neon-city', 'pine-basin', 'cinder-quarry']);
 const communityTrackPropTypes = new Set(['podium', 'relay-podium-gate', 'house', 'warehouse', 'tower', 'container', 'barrier']);
+const communityTrackGateTypes = new Set(['neon-square', 'neon-ladder', 'neon-flag', 'neon-hurdle', 'neon-dive']);
+const communityTrackGateColors = new Set(['cyan', 'coral', 'lime', 'orange', 'violet']);
 const redRacePodiumTopOffset = 3.1325;
 const redRacePodiumHeadingOffset = Math.PI / 2;
+
+function communityTrackArray(value, length, isValid, normalize = (item) => item) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length !== length || value.some((item) => !isValid(item))) return null;
+  return value.map(normalize);
+}
+
+function normalizeTrackDegrees(value) {
+  return Math.round((((value % 360) + 360) % 360) * 100) / 100;
+}
+
 function publicCommunityTrack(track) {
   return {
     id: track.id,
@@ -659,6 +682,16 @@ function publicCommunityTrack(track) {
     points: track.points,
     startFinishIndex: Number.isSafeInteger(track.startFinishIndex) && track.startFinishIndex >= 0 && track.startFinishIndex < track.points.length ? track.startFinishIndex : 0,
     gateRotations: Array.isArray(track.gateRotations) ? track.gateRotations : [],
+    gateRotationsX: Array.isArray(track.gateRotationsX) ? track.gateRotationsX : [],
+    gateRotationsZ: Array.isArray(track.gateRotationsZ) ? track.gateRotationsZ : [],
+    gateScales: Array.isArray(track.gateScales) ? track.gateScales : [],
+    gateScalesX: Array.isArray(track.gateScalesX) ? track.gateScalesX : [],
+    gateScalesY: Array.isArray(track.gateScalesY) ? track.gateScalesY : [],
+    gateScalesZ: Array.isArray(track.gateScalesZ) ? track.gateScalesZ : [],
+    gateTypes: Array.isArray(track.gateTypes) ? track.gateTypes : [],
+    gateColors: Array.isArray(track.gateColors) ? track.gateColors : [],
+    gateIds: Array.isArray(track.gateIds) ? track.gateIds : [],
+    gateOpeningIndices: Array.isArray(track.gateOpeningIndices) ? track.gateOpeningIndices : [],
     gateEntryDirections: Array.isArray(track.gateEntryDirections) ? track.gateEntryDirections : [],
     laps: Number.isSafeInteger(track.laps) && track.laps >= 1 && track.laps <= 5 ? track.laps : 1,
     objects: Array.isArray(track.objects) ? track.objects : [],
@@ -706,8 +739,25 @@ async function handleCommunityTracks(request, response) {
     return json(response, 400, { error: 'Track gate directions are invalid.' });
   }
   const gateRotations = Array.isArray(submittedRotations)
-    ? submittedRotations.map((rotation) => Math.round((((rotation % 360) + 360) % 360) * 100) / 100)
+    ? submittedRotations.map(normalizeTrackDegrees)
     : [];
+  const degreesValid = (rotation) => typeof rotation === 'number' && Number.isFinite(rotation) && Math.abs(rotation) <= 360;
+  const scaleValid = (scale) => typeof scale === 'number' && Number.isFinite(scale) && scale >= 0.5 && scale <= 2;
+  const gateRotationsX = communityTrackArray(body.gateRotationsX, points.length, degreesValid, normalizeTrackDegrees);
+  const gateRotationsZ = communityTrackArray(body.gateRotationsZ, points.length, degreesValid, normalizeTrackDegrees);
+  const gateScales = communityTrackArray(body.gateScales, points.length, scaleValid, (scale) => Math.round(scale * 100) / 100);
+  const gateScalesX = communityTrackArray(body.gateScalesX, points.length, scaleValid, (scale) => Math.round(scale * 100) / 100);
+  const gateScalesY = communityTrackArray(body.gateScalesY, points.length, scaleValid, (scale) => Math.round(scale * 100) / 100);
+  const gateScalesZ = communityTrackArray(body.gateScalesZ, points.length, scaleValid, (scale) => Math.round(scale * 100) / 100);
+  const gateTypes = communityTrackArray(body.gateTypes, points.length, (type) => communityTrackGateTypes.has(type));
+  const gateColors = communityTrackArray(body.gateColors, points.length, (color) => communityTrackGateColors.has(color));
+  const gateIds = communityTrackArray(body.gateIds, points.length, (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(id));
+  const gateOpeningIndices = communityTrackArray(body.gateOpeningIndices, points.length,
+    (index) => Number.isSafeInteger(index) && index >= -1 && index <= 4);
+  if ([gateRotationsX, gateRotationsZ, gateScales, gateScalesX, gateScalesY, gateScalesZ,
+    gateTypes, gateColors, gateIds, gateOpeningIndices].some((items) => items === null)) {
+    return json(response, 400, { error: 'Track gate models or transforms are invalid.' });
+  }
   const submittedEntryDirections = body.gateEntryDirections;
   if (submittedEntryDirections !== undefined && (!Array.isArray(submittedEntryDirections) || submittedEntryDirections.length !== points.length
     || submittedEntryDirections.some((directions) => {
@@ -794,6 +844,16 @@ async function handleCommunityTracks(request, response) {
     points,
     startFinishIndex,
     gateRotations,
+    gateRotationsX,
+    gateRotationsZ,
+    gateScales,
+    gateScalesX,
+    gateScalesY,
+    gateScalesZ,
+    gateTypes,
+    gateColors,
+    gateIds,
+    gateOpeningIndices,
     gateEntryDirections,
     laps,
     objects,
@@ -891,9 +951,13 @@ function raceGateCount(lobby) {
   return raceTrackSequenceIndices(lobby).length;
 }
 
+function lobbyMinimumRacePlayers(lobby) {
+  return lobby.gameMode === 'relay-race' ? 8 : 2;
+}
+
 function beginLobbyRace(lobby, now = Date.now()) {
   if (lobby.status !== 'open'
-    || lobby.members.length < (lobby.maxPlayers || 8)
+    || lobby.members.length < lobbyMinimumRacePlayers(lobby)
     || !lobby.members.every((member) => member.readyAt)
     || !lobbyHasCompatibleTrack(lobby)
     || raceGateCount(lobby) < 2) return false;
@@ -1060,9 +1124,10 @@ function cleanLobbies() {
     lobby.members = lobby.members.filter((member) => now - member.lastSeenAt < lobbyHeartbeatMs);
     if (!lobby.members.length) continue;
     if (lobby.gameMode === 'relay-race') lobby.maxPlayers = 8;
+    else lobby.maxPlayers = Math.max(2, Math.min(8, Number(lobby.maxPlayers) || 8));
     if (lobby.startAt && !Number.isFinite(lobby.raceAt)) lobby.raceAt = lobby.startAt + 5000;
     if (!lobby.members.some((member) => member.userId === lobby.hostId)) lobby.hostId = lobby.members[0].userId;
-    if (['starting', 'grid'].includes(lobby.status) && lobby.members.length < (lobby.maxPlayers || 8)) {
+    if (['starting', 'grid'].includes(lobby.status) && lobby.members.length < lobbyMinimumRacePlayers(lobby)) {
       lobby.status = 'open';
       lobby.startAt = null;
       lobby.raceAt = null;
@@ -1161,7 +1226,9 @@ function safeLobbyConfig(body = {}, fallback = {}) {
   const requestedCapacity = Number(body.maxPlayers);
   const maxPlayers = gameMode === 'relay-race'
     ? 8
-    : Number.isInteger(requestedCapacity) && requestedCapacity >= 1 && requestedCapacity <= 8 ? requestedCapacity : fallback.maxPlayers || 8;
+    : Number.isInteger(requestedCapacity) && requestedCapacity >= 1 && requestedCapacity <= 8
+      ? Math.max(2, requestedCapacity)
+      : Math.max(2, Number(fallback.maxPlayers) || 8);
   const requestedName = typeof body.serverName === 'string' ? body.serverName.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 32) : '';
   const serverName = requestedName || fallback.serverName || 'Open Flight Server';
   return { biome, trackId, serverRegion, gameMode, trackSource, maxPlayers, serverName };
@@ -1241,6 +1308,77 @@ async function persistLobby(response) {
   catch { json(response, 500, { error: 'Could not save the flight party. Please try again.' }); return false; }
 }
 
+const blockedChatWords = new Set([
+  'arse', 'arsehole', 'ass', 'asshat', 'asshole', 'asswipe', 'bastard', 'bitch', 'bollocks', 'bugger',
+  'bullshit', 'cock', 'crap', 'cracker', 'cunt', 'dammit', 'damn', 'damned', 'dick', 'dickhead',
+  'douche', 'douchebag', 'dumbass', 'fag', 'faggot', 'fuck', 'fuckers', 'fuckface', 'fuckhead', 'fucker',
+  'fucking', 'fuckup', 'goddamn', 'jackass', 'motherfucker', 'motherfuckers', 'piss', 'prick', 'pussy',
+  'shit', 'shithead', 'shitty', 'slut', 'twat', 'whore', 'whores', 'wanker', 'hoe', 'retard', 'retarded',
+  'nigga', 'nigger', 'chink', 'gook', 'spic', 'wetback', 'kike', 'coon', 'beaner', 'tranny', 'dyke',
+  'skank', 'honky', 'raghead', 'towelhead', 'redskin', 'jap', 'paki', 'darkie', 'jigaboo', 'nazi', 'nazis',
+]);
+const blockedChatPhrases = [
+  'go back to the kitchen', 'women belong in the kitchen', 'women belong in kitchen',
+  'women are inferior', 'women are property', 'women should not vote', 'women cannot drive',
+  'women should not be allowed to vote', 'women should stay at home', 'women are only good for',
+  'women are stupid', 'women are dumb', 'women are useless', 'women are not equal to men',
+  'women should obey men', 'men should control women', 'men are superior to women',
+  'men are better than women', 'women are worse than men', 'men are trash', 'women are trash',
+  'white power', 'white supremacy', 'heil hitler', 'gas the jews', 'kill all women',
+  'go back to your country', 'go back where you came from',
+].map((phrase) => phrase.split(' '));
+const protectedChatGroups = [
+  'women', 'woman', 'men', 'man', 'girls', 'girl', 'boys', 'boy', 'females', 'female', 'males', 'male',
+  'black people', 'black men', 'black women', 'blacks', 'white people', 'white men', 'white women', 'whites',
+  'jews', 'jewish people', 'muslims', 'christians', 'hindus', 'sikhs', 'arabs', 'asians', 'asian people',
+  'latinos', 'latinas', 'hispanics', 'immigrants', 'refugees', 'gay people', 'gays', 'lesbians', 'trans people',
+  'transgender people', 'disabled people', 'autistic people',
+].map((group) => group.split(' ').join('\\s+')).join('|');
+const targetedHatePatterns = [
+  new RegExp(`\\b(?:i\\s+)?(?:hate|despise|loathe|kill|gas|exterminate|wipe\\s+out|eliminate)\\s+(?:(?:all|every|the)\\s+)?(?:${protectedChatGroups})\\b`, 'i'),
+  new RegExp(`\\b(?:all|every)\\s+(?:${protectedChatGroups})\\s+(?:are|is|should\\s+be)\\s+(?:inferior|subhuman|animals|vermin|parasites|stupid|useless|killed|dead|removed|deported)\\b`, 'i'),
+  new RegExp(`\\b(?:${protectedChatGroups})\\s+(?:should|must|need\\s+to|deserve\\s+to)\\s+(?:be\\s+)?(?:killed|die|disappear|be\\s+removed|be\\s+deported)\\b`, 'i'),
+];
+
+function normalizedChatTokens(value) {
+  const source = typeof value === 'string' ? value : '';
+  const homoglyphs = source.normalize('NFKC').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
+    .replace(/[\u0430\u03b1]/g, 'a')
+    .replace(/[\u0435\u03b5]/g, 'e')
+    .replace(/[\u043e\u03bf]/g, 'o')
+    .replace(/[\u0440\u03c1]/g, 'p')
+    .replace(/[\u0441\u03f2]/g, 'c')
+    .replace(/[\u0445\u03c7]/g, 'x')
+    .replace(/[\u0443]/g, 'y')
+    .replace(/[\u0456]/g, 'i')
+    .replace(/[\u043a]/g, 'k')
+    .replace(/[\u043c]/g, 'm')
+    .replace(/[\u0442]/g, 't')
+    .replace(/[\u043d]/g, 'h')
+    .replace(/[\u0432]/g, 'b')
+    .replace(/[013457@$!|]/g, (character) => ({ 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', '$': 's', '!': 'i', '|': 'i' })[character])
+    .replace(/([a-z])\1{2,}/g, '$1');
+  return homoglyphs.match(/[a-z]+/g) || [];
+}
+
+function containsBlockedChatLanguage(value) {
+  const tokens = normalizedChatTokens(value);
+  if (tokens.some((token) => blockedChatWords.has(token))) return true;
+  const normalizedText = ` ${tokens.join(' ')} `;
+  if (blockedChatPhrases.some((phrase) => normalizedText.includes(` ${phrase.join(' ')} `))) return true;
+  if (targetedHatePatterns.some((pattern) => pattern.test(normalizedText))) return true;
+
+  // Catch words split across spaces or punctuation without matching ordinary substrings.
+  for (let start = 0; start < tokens.length; start += 1) {
+    let joined = '';
+    for (let end = start; end < tokens.length && end < start + 4 && joined.length < 16; end += 1) {
+      joined += tokens[end];
+      if (blockedChatWords.has(joined)) return true;
+    }
+  }
+  return false;
+}
+
 async function handleLobby(request, response, url) {
   if (!verifySameOrigin(request)) return json(response, 403, { error: 'This party request was rejected.' });
   cleanLobbies();
@@ -1268,11 +1406,55 @@ async function handleLobby(request, response, url) {
     }
     return json(response, 200, { lobby: lobby ? publicLobby(lobby) : null, user: publicUser(user) });
   }
+  if (request.method === 'GET' && url.pathname === '/api/lobby/chat') {
+    const channel = url.searchParams.get('channel') || 'lobby';
+    if (channel === 'world') return json(response, 200, {
+      messages: store.worldChat.filter((message) => !containsBlockedChatLanguage(message.text || '')).slice(-80),
+    });
+    if (channel !== 'lobby') return json(response, 400, { error: 'Choose the lobby or world chat channel.' });
+    const lobby = lobbyForUser(user.id);
+    if (!lobby) return json(response, 409, { error: 'Join a lobby to read lobby chat.' });
+    return json(response, 200, {
+      messages: (lobby.chatMessages || []).filter((message) => !containsBlockedChatLanguage(message.text || '')).slice(-80),
+    });
+  }
   if (request.method !== 'POST') return json(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, POST' });
 
   let body;
   try { body = await readJson(request); }
   catch (error) { return json(response, error.status || 400, { error: error.message }); }
+
+  if (url.pathname === '/api/lobby/chat') {
+    const channel = body.channel === 'world' ? 'world' : body.channel === 'lobby' ? 'lobby' : '';
+    const text = typeof body.text === 'string' ? body.text.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, 240) : '';
+    if (!channel) return json(response, 400, { error: 'Choose the lobby or world chat channel.' });
+    if (!text) return json(response, 400, { error: 'Write a message before sending.' });
+    if (!allowRate(`chat:${user.id}`, 6, 10_000)) return json(response, 429, { error: 'You are sending messages too quickly. Wait a moment.' });
+    if (containsBlockedChatLanguage(text)) {
+      return json(response, 400, { error: 'That message contains language that is not allowed in chat.' });
+    }
+    const lobby = channel === 'lobby' ? lobbyForUser(user.id) : null;
+    if (channel === 'lobby' && !lobby) return json(response, 409, { error: 'Join a lobby to send lobby chat.' });
+    const message = {
+      id: randomUUID(),
+      userId: user.id,
+      username: displayUsername(user.username),
+      text,
+      createdAt: Date.now(),
+    };
+    if (channel === 'world') {
+      store.worldChat.push(message);
+      store.worldChat = store.worldChat.slice(-120);
+    } else {
+      lobby.chatMessages ||= [];
+      lobby.chatMessages.push(message);
+      lobby.chatMessages = lobby.chatMessages.slice(-80);
+      lobby.updatedAt = Date.now();
+    }
+    try { await saveStore(); }
+    catch { return json(response, 500, { error: 'Could not send the chat message.' }); }
+    return json(response, 200, { message });
+  }
 
   if (url.pathname === '/api/lobby/create') {
     if (body.gameMode === 'competitive-4v4' && !nextTournament()) {
@@ -1388,7 +1570,8 @@ async function handleLobby(request, response, url) {
       lobby.updatedAt = Date.now();
     }
     if (!await persistLobby(response)) return;
-    const lobbyStatusMessage = `Match found. Loading lobby ${lobby.members.length}/${lobby.maxPlayers}; free fly while pilots join.`;
+    const minimumPlayers = lobbyMinimumRacePlayers(lobby);
+    const lobbyStatusMessage = `Match found. Waiting for at least ${minimumPlayers} pilots; free fly while everyone loads in.`;
     return json(response, 200, { lobby: publicLobby(lobby), message: lobbyStatusMessage });
   }
 
@@ -1428,7 +1611,7 @@ async function handleLobby(request, response, url) {
     member.readyAt ||= now;
     member.lastSeenAt = now;
     if (lobby.status === 'open'
-      && lobby.members.length >= (lobby.maxPlayers || 8)
+      && lobby.members.length >= lobbyMinimumRacePlayers(lobby)
       && lobby.members.every((candidate) => candidate.readyAt)) {
       beginLobbyRace(lobby, now);
     }
@@ -1442,7 +1625,7 @@ async function handleLobby(request, response, url) {
     if (!lobby) return json(response, 404, { error: 'Create or join a party first.' });
     if (lobby.hostId !== user.id) return json(response, 403, { error: 'Only the party host can start a crew race.' });
     if (lobby.status !== 'open') return json(response, 409, { error: 'A crew race is already in progress.' });
-    if (!beginLobbyRace(lobby)) return json(response, 409, { error: 'Wait for a full, loaded lobby and choose a supported course before starting.' });
+    if (!beginLobbyRace(lobby)) return json(response, 409, { error: `At least ${lobbyMinimumRacePlayers(lobby)} loaded pilots and a supported course are required before starting.` });
     if (!await persistLobby(response)) return;
     return json(response, 200, { lobby: publicLobby(lobby) });
   }
