@@ -9032,6 +9032,10 @@ function setGameChatStatus(message = '', isError = false) {
   status.classList.toggle('is-error', isError);
 }
 
+function isGameChatSurfaceVisible() {
+  return flying || (!flying && currentPage === 'singleplayer');
+}
+
 function updateGameChatUI() {
   const panel = document.querySelector('#gameChat');
   if (!panel) return;
@@ -9055,7 +9059,7 @@ function updateGameChatUI() {
     renderGameChatMessages();
   }
 
-  panel.hidden = !gameChatEnabled || !flying;
+  panel.hidden = !gameChatEnabled || !isGameChatSurfaceVisible();
   const lobbyTab = document.querySelector('#gameChatLobbyTab');
   const worldTab = document.querySelector('#gameChatWorldTab');
   const title = document.querySelector('#gameChatChannelTitle');
@@ -9085,7 +9089,7 @@ function setGameChatChannel(channel) {
 }
 
 async function refreshGameChat() {
-  if (!gameChatEnabled || !flying || !signedInUser?.id || gameChatRequestPending) return;
+  if (!gameChatEnabled || !isGameChatSurfaceVisible() || !signedInUser?.id || gameChatRequestPending) return;
   const channel = gameChatChannel;
   const userId = signedInUser.id;
   const lobbyCode = partyLobby?.code || '';
@@ -10667,6 +10671,8 @@ function setPage(page) {
   }
   if (page !== 'builder') setBuilderSettingsOpen(false);
   currentPage = page;
+  updateGameChatUI();
+  if (page === 'singleplayer' && gameChatEnabled) void refreshGameChat();
   updateBuilderRelayPodiumGateIndicators();
   updateFlightMainMenuButton();
   if (page === 'builder') updateBuilderAssetLibrary(builderGameMode);
