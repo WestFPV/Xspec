@@ -1399,6 +1399,7 @@ function publicLobby(lobby) {
         ready: Boolean(member.readyAt),
         nextGateIndex: Number.isSafeInteger(member.nextGateIndex) ? member.nextGateIndex : 0,
         lastCheckpointAt: member.lastCheckpointAt || null,
+        raceStartedAt: member.raceStartedAt || null,
         finishedAt: member.finishedAt || null,
         didNotFinish: Boolean(member.didNotFinish),
         relayTeam: Number.isSafeInteger(member.relayTeam) ? member.relayTeam : null,
@@ -1574,7 +1575,19 @@ async function handleLobby(request, response, url) {
         continue;
       }
       if (memberId === user.id) continue;
-      states.push({ id: memberId, position: state.position, velocity: state.velocity, orientation: state.orientation, updatedAt: state.updatedAt });
+      const member = lobby.members.find((candidate) => candidate.userId === memberId);
+      const raceStartedAt = Number(member?.raceStartedAt) || 0;
+      const raceTimeMs = raceStartedAt
+        ? Math.max(0, (Number(member?.finishedAt) || now) - raceStartedAt)
+        : null;
+      states.push({
+        id: memberId,
+        position: state.position,
+        velocity: state.velocity,
+        orientation: state.orientation,
+        updatedAt: state.updatedAt,
+        raceTimeMs,
+      });
     }
     if (!snapshots.size) flightPositionSnapshots.delete(lobby.id);
     return json(response, 200, { states, serverTime: now });

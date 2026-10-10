@@ -448,13 +448,26 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
 .race-leaderboard[hidden] { display: none; }
 .race-leaderboard-heading { display: block; margin-bottom: 6px; color: rgba(190,225,240,.56); font: 700 7px var(--mono); letter-spacing: .16em; }
 .race-leaderboard ol { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.race-leaderboard-row { min-width: 0; min-height: 22px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 35px; align-items: center; gap: 7px; padding: 2px 4px; border-top: 1px solid rgba(220,240,250,.055); color: rgba(230,241,247,.7); }
+.race-leaderboard-row { min-width: 0; min-height: 22px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 55px 35px; align-items: center; gap: 7px; padding: 2px 4px; border-top: 1px solid rgba(220,240,250,.055); color: rgba(230,241,247,.7); }
 .race-leaderboard-place { color: rgba(193,213,225,.5); font: 700 8px var(--mono); }
 .race-leaderboard-name { overflow: hidden; font: 600 9px var(--sans); text-overflow: ellipsis; white-space: nowrap; }
+.race-leaderboard-time { color: rgba(141,234,255,.82); text-align: right; font: 700 7px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .race-leaderboard-progress { color: rgba(183,205,217,.48); text-align: right; font: 7px var(--mono); }
 .race-leaderboard-row.is-leading { background: rgba(93,213,180,.09); color: #eafff7; }
-.race-leaderboard-row.is-leading .race-leaderboard-place, .race-leaderboard-row.is-leading .race-leaderboard-progress { color: #8ef4c7; }
+.race-leaderboard-row.is-leading .race-leaderboard-place, .race-leaderboard-row.is-leading .race-leaderboard-time, .race-leaderboard-row.is-leading .race-leaderboard-progress { color: #8ef4c7; }
 .race-leaderboard-row.is-local .race-leaderboard-name { color: #8fe7ff; }
+#raceLeaderboard { padding: 0; border: 0; background: transparent; box-shadow: none; backdrop-filter: none; text-shadow: 0 2px 8px rgba(0,0,0,.95), 0 0 16px rgba(0,0,0,.72); }
+#raceLeaderboard .race-leaderboard-heading { margin-bottom: 9px; color: rgba(198,237,249,.86); font-size: 8px; letter-spacing: .2em; text-shadow: 0 0 14px rgba(87,220,255,.32), 0 2px 8px rgba(0,0,0,.95); }
+#raceLeaderboard .race-leaderboard-row { min-height: 25px; gap: 8px; padding: 2px 0; border-top: 0; background: transparent; color: rgba(245,250,252,.94); }
+#raceLeaderboard .race-leaderboard-place { color: #b9eaf6; font-size: 10px; text-shadow: 0 0 10px rgba(71,210,245,.25); }
+#raceLeaderboard .race-leaderboard-name { color: rgba(250,252,252,.96); font-size: 10px; font-weight: 700; letter-spacing: .015em; text-shadow: 0 2px 8px rgba(0,0,0,.98); }
+#raceLeaderboard .race-leaderboard-time { color: #83eaff; font-size: 8px; text-shadow: 0 0 12px rgba(63,214,255,.3), 0 2px 8px rgba(0,0,0,.98); }
+#raceLeaderboard .race-leaderboard-progress { color: rgba(219,235,241,.75); font-size: 8px; text-shadow: 0 2px 8px rgba(0,0,0,.98); }
+#raceLeaderboard .race-leaderboard-row.is-leading { background: transparent; color: #f4fff9; }
+#raceLeaderboard .race-leaderboard-row.is-leading .race-leaderboard-place,
+#raceLeaderboard .race-leaderboard-row.is-leading .race-leaderboard-time,
+#raceLeaderboard .race-leaderboard-row.is-leading .race-leaderboard-progress { color: #9dffd5; text-shadow: 0 0 12px rgba(87,255,190,.34), 0 2px 8px rgba(0,0,0,.98); }
+#raceLeaderboard .race-leaderboard-row.is-local .race-leaderboard-name { color: #9cecff; }
 .race-finish-leaderboard { top: 50%; right: auto; left: 50%; z-index: 12; width: min(560px, calc(100vw - 36px)); max-height: min(84vh, 650px); padding: 0; overflow: hidden; pointer-events: auto; transform: translate(-50%, -50%); border: 0; background: transparent; box-shadow: none; backdrop-filter: none; color: #f3fbff; text-shadow: 0 2px 12px rgba(0,0,0,.95), 0 0 28px rgba(23,174,213,.2); }
 .race-finish-leaderboard[hidden] { display: none; }
 .race-finish-leaderboard:not([hidden]) { animation: raceLeaderboardReveal .38s cubic-bezier(.2,.75,.25,1) both; }
@@ -615,8 +628,12 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
   #raceLeaderboard { left: auto; right: 12px; }
   .flight-damage-indicator { top: 88px; left: 12px; width: min(250px, calc(100vw - 24px)); }
   .relay-race-timing { top: auto; right: 12px; bottom: 84px; width: min(210px, calc(100vw - 24px)); }
-  .race-leaderboard-row { min-height: 20px; grid-template-columns: 17px minmax(0, 1fr) 31px; gap: 5px; }
+  .race-leaderboard-row { min-height: 20px; grid-template-columns: 17px minmax(0, 1fr) 50px 31px; gap: 5px; }
   .race-leaderboard-name { font-size: 8px; }
+  .race-leaderboard-time { font-size: 6px; }
+  #raceLeaderboard .race-leaderboard-row { min-height: 23px; gap: 5px; }
+  #raceLeaderboard .race-leaderboard-name { font-size: 9px; }
+  #raceLeaderboard .race-leaderboard-time, #raceLeaderboard .race-leaderboard-progress { font-size: 7px; }
   .flight-hud .race-finish-leaderboard { top: 50%; right: auto; left: 50%; width: min(430px, calc(100vw - 24px)); max-height: min(72vh, 470px); transform: translate(-50%, -50%); }
   .race-start-overlay { min-width: 185px; padding: 13px 17px 11px; }
   .hud-readout strong { font-size: 35px; }
@@ -1709,11 +1726,18 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
 .axis-invert { accent-color: #68dff7; }
 .transmitter-calibration { border-color: rgba(135,181,202,.12); }
 .transmitter-calibration > span { color: rgba(191,215,229,.48); font-size: 7px; }
-.transmitter-calibration-dialog { padding: 26px; }
-.calibration-dialog-kicker { font-size: 8px; }
-.transmitter-calibration-dialog h3 { font-size: 21px; }
-.transmitter-calibration-dialog p { font-size: 9px; }
-.calibration-dialog-status { font-size: 8px; }
+.transmitter-calibration-dialog { width: min(520px, calc(100vw - 36px)); padding: 30px; }
+.calibration-dialog-kicker { font-size: 10px; }
+.transmitter-calibration-dialog h3 { font-size: 24px; }
+.transmitter-calibration-dialog p { min-height: 66px; margin-bottom: 18px; color: rgba(225,239,246,.92); font: 14px/1.55 var(--sans); }
+.transmitter-calibration-dialog progress { height: 8px; }
+.calibration-dialog-status { min-height: 42px; color: #a5edfb; font: 600 12px/1.5 var(--sans); letter-spacing: .01em; }
+.calibration-dialog-actions .small-outline-button { min-height: 36px; padding: 0 12px; font-size: 10px; }
+@media (max-width: 520px) {
+  .transmitter-calibration-dialog { padding: 20px; }
+  .transmitter-calibration-dialog h3 { font-size: 21px; }
+  .transmitter-calibration-dialog p { min-height: 0; font-size: 13px; }
+}
 .rate-setup { margin-top: 0; padding-top: 13px; border-color: rgba(79,191,222,.24); }
 .rate-setup-heading strong { color: #eff7fc; font-size: 13px; }
 .rate-type-label { font-size: 7px; }

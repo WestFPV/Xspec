@@ -499,13 +499,13 @@
                   <div class="transmitter-calibration"><span>Guided axis mapping and button setup for your transmitter.</span><button id="calibrateSticks" class="small-outline-button" type="button">SET UP TRANSMITTER</button></div>
                   <dialog id="transmitterCalibrationDialog" class="transmitter-calibration-dialog" aria-labelledby="transmitterCalibrationTitle">
                     <div class="calibration-dialog-kicker">CONTROLLER SETUP / <span id="transmitterCalibrationStep">STEP 1 OF 7</span></div>
-                    <h3 id="transmitterCalibrationTitle">Set up transmitter</h3>
-                    <p id="transmitterCalibrationInstructions">Keep yaw, pitch, and roll centered. Hold throttle at its minimum while the controller is sampled.</p>
-                    <progress id="transmitterCalibrationProgress" max="90" value="0" aria-label="Calibration progress"></progress>
-                    <div class="calibration-dialog-status" id="transmitterCalibrationStatus" role="status">SAMPLING CENTER…</div>
+                    <h3 id="transmitterCalibrationTitle">Center controls</h3>
+                    <p id="transmitterCalibrationInstructions">Center sticks. Throttle at minimum.</p>
+                    <progress id="transmitterCalibrationProgress" max="30" value="0" aria-label="Calibration step progress"></progress>
+                    <div class="calibration-dialog-status" id="transmitterCalibrationStatus" role="status">Click Ready when set.</div>
                     <div class="calibration-dialog-actions">
                       <button id="calibrationCancel" class="small-outline-button" type="button">CANCEL</button>
-                      <button id="calibrationAction" class="small-outline-button" type="button" disabled>CAPTURING CENTER…</button>
+                      <button id="calibrationAction" class="small-outline-button" type="button">READY</button>
                     </div>
                   </dialog>
                   <button id="toggleStickSetup" class="stick-setup-toggle" type="button" aria-expanded="false" aria-controls="stickSetupPanel"><span><i class="tiny-pip"></i> STICK SETUP</span><b aria-hidden="true">+</b></button>
@@ -621,7 +621,7 @@
         <div id="courseProgress" class="course-progress" aria-live="polite" hidden><b id="courseProgressCount">Lap: 1/1</b></div>
         <aside id="flightDamageIndicator" class="flight-damage-indicator" aria-label="Drone damage status" aria-live="polite" aria-atomic="true" hidden><span class="flight-damage-heading">DRONE CONDITION</span><ul id="flightDamageStatusList"></ul></aside>
         <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b></div>
-        <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
+        <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race positions and times" hidden><span class="race-leaderboard-heading">RACE POSITION / TIME</span><ol id="raceLeaderboardRows"></ol></aside>
         <aside id="raceFinishLeaderboard" class="race-leaderboard race-finish-leaderboard" aria-label="Race leaderboard" aria-live="polite" hidden>
           <header class="race-finish-leaderboard-header"><div><span id="raceFinishLeaderboardHeading" class="race-leaderboard-heading">RACE LEADERBOARD</span><strong id="raceFinishLeaderboardTrack"></strong></div></header>
           <div class="race-finish-leaderboard-columns" aria-hidden="true"><span>RANK</span><span>PILOT</span><span>BEST TIME</span></div>

@@ -383,7 +383,11 @@ const flightCollisionOctree = new Octree();
 const flightCollisionRadius = 0.62;
 const flightCollisionStepDistance = 0.1;
 const flightCollisionExtent = 1.8;
-const flightDroneModelHalfExtents = new THREE.Vector3(1.5, 0.3, 1.5);
+let flightDroneGroundSupportOffsets = Array.from({ length: 8 }, (_, corner) => new THREE.Vector3(
+  (corner & 1 ? 1 : -1) * 1.5,
+  (corner & 2 ? 1 : -1) * 0.3,
+  (corner & 4 ? 1 : -1) * 1.5,
+));
 const flightCollisionRestitution = 0.24;
 const flightCollisionTangentialRetention = 0.78;
 const flightCollisionInverseInertia = 0.42;
@@ -395,6 +399,12 @@ const flightCollisionTangentVelocity = new THREE.Vector3();
 const flightCollisionAngularAxis = new THREE.Vector3();
 const flightCollisionAngularStep = new THREE.Quaternion();
 const flightGroundSupportOffset = new THREE.Vector3();
+const flightGroundUpLocal = new THREE.Vector3();
+const flightGroundContactPoint = new THREE.Vector3();
+const flightGroundContactTorque = new THREE.Vector3();
+const flightGroundProbeBounds = new THREE.Box3();
+const flightDebrisGroundBounds = new THREE.Box3();
+const flightGroundContactNormal = new THREE.Vector3(0, 1, 0);
 const flightCollisionMotorOffsets = [
   [-1.28, -0.84],
   [-1.28, 0.84],
@@ -458,6 +468,7 @@ const flightDamageState = {
   smokeSpawnTime: 0,
   fireSpawnTime: 0,
 };
+const flightArmDamageMeshes = [];
 const flightDebris = [];
 const flightDamageParticles = [];
 let flightSmokeTexture = null;
@@ -508,6 +519,7 @@ const REQUIRED_TRACK_PODIUM_COUNT = 8;
 const RELAY_STATION_COUNT = 4;
 const RELAY_GATE_PODIUM_DISTANCE = 8;
 const RELAY_PODIUM_STAGE_FORWARD_OFFSET = 2.6;
+const RELAY_PODIUM_STAGE_SIDE_OFFSET = 6.8;
 const RED_RACE_PODIUM_TOP_Y = 3.1325;
 const RED_RACE_PODIUM_HEADING_OFFSET = Math.PI / 2;
 const RED_RACE_PODIUM_DRONE_LEFT_TURN = Math.PI / 2;
@@ -3953,9 +3965,12 @@ function createBuilderPropModel(type) {
   } else if (type === 'podium') {
     group.add(createRedRacePodium(getBuilderRacePodiumLabelMaterial()));
   } else if (type === 'relay-podium-gate') {
-    const podium = createRedRacePodium(getBuilderRacePodiumLabelMaterial());
-    podium.position.z = RELAY_PODIUM_STAGE_FORWARD_OFFSET;
-    group.add(podium);
+    for (const side of [-1, 1]) {
+      const podium = createRedRacePodium(getBuilderRacePodiumLabelMaterial());
+      podium.position.set(side * RELAY_PODIUM_STAGE_SIDE_OFFSET, 0, RELAY_PODIUM_STAGE_FORWARD_OFFSET);
+      podium.userData.relayPodiumSide = side;
+      group.add(podium);
+    }
     const neon = new THREE.MeshStandardMaterial({
       color: 0x45dfff,
       emissive: 0x45dfff,
@@ -4247,7 +4262,8 @@ function drawFallbackBuilderPreview(canvas, type) {
     context.lineWidth = 4;
     context.strokeRect(40, 8, 48, 53);
     context.fillStyle = '#a91f2d';
-    context.fillRect(44, 39, 40, 18);
+    context.fillRect(43, 46, 17, 10);
+    context.fillRect(68, 46, 17, 10);
   }
   if (propType === 'house') { context.beginPath(); context.moveTo(34, 39); context.lineTo(64, 15); context.lineTo(94, 39); context.closePath(); context.fill(); }
   if (propType === 'tower') context.fillRect(54, 10, 20, 52);
@@ -5407,24 +5423,151 @@ function flightGroundYAt(x, z, flightY) {
   return terrainSurfaceYAt(activeBiome, x, z);
 }
 
-function flightGroundClearance(orientation = flight.orientation) {
-  let lowestModelPoint = 0;
-  for (let corner = 0; corner < 8; corner += 1) {
-    flightGroundSupportOffset.set(
-      (corner & 1 ? 1 : -1) * flightDroneModelHalfExtents.x * showDrone.scale.x,
-      (corner & 2 ? 1 : -1) * flightDroneModelHalfExtents.y * showDrone.scale.y,
-      (corner & 4 ? 1 : -1) * flightDroneModelHalfExtents.z * showDrone.scale.z,
-    ).applyQuaternion(orientation);
-    lowestModelPoint = Math.min(lowestModelPoint, flightGroundSupportOffset.y);
+function flightDebrisGroundYAt(x, z) {
+  if (currentPage === 'builder' || currentPage === 'trackPicker') {
+    const overPlatform = Math.abs(x) <= menuPlatformHalfSize && Math.abs(z - menuPlatformCenterZ) <= menuPlatformHalfSize;
+    return overPlatform ? menuPlatformSurfaceY : -10000;
   }
-  let clearance = Math.max(0.12, -lowestModelPoint);
-  flightCollisionBodySpheres.forEach(({ part, motorIndex, offset, radius }) => {
-    if ((part === 'prop' && flightDamageState.brokenProps[motorIndex])
-      || (part === 'arm' && flightDamageState.brokenArms[motorIndex])) return;
-    flightGroundSupportOffset.copy(offset).applyQuaternion(orientation);
-    clearance = Math.max(clearance, radius - flightGroundSupportOffset.y);
+  return terrainSurfaceYAt(activeBiome, x, z);
+}
+
+function flightGroundClearance(orientation = flight.orientation) {
+  flightDroneInverseOrientation.copy(orientation).invert();
+  flightGroundUpLocal.copy(axisY).applyQuaternion(flightDroneInverseOrientation);
+  let lowestModelPoint = 0;
+  for (const supportOffset of flightDroneGroundSupportOffsets) {
+    const projectedY = supportOffset.x * showDrone.scale.x * flightGroundUpLocal.x
+      + supportOffset.y * showDrone.scale.y * flightGroundUpLocal.y
+      + supportOffset.z * showDrone.scale.z * flightGroundUpLocal.z;
+    lowestModelPoint = Math.min(lowestModelPoint, projectedY);
+  }
+  return Math.max(0.005, -lowestModelPoint + 0.035);
+}
+
+function refreshFlightGroundSupportOffsets() {
+  const supportOffsets = [];
+  const supportKeys = new Set();
+  showDrone.updateMatrixWorld(true);
+  const inverseShowDroneMatrix = showDrone.matrixWorld.clone().invert();
+  const addPoint = (point) => {
+    const key = `${Math.round(point.x * 10000)}:${Math.round(point.y * 10000)}:${Math.round(point.z * 10000)}`;
+    if (supportKeys.has(key)) return;
+    supportKeys.add(key);
+    supportOffsets.push(point.clone());
+  };
+  showDrone.traverse((node) => {
+    if (!node.isMesh || !node.geometry?.attributes?.position) return;
+    let ancestor = node.parent;
+    while (ancestor && ancestor !== showDrone && !ancestor.userData.isPartyRotor) ancestor = ancestor.parent;
+    if (ancestor?.userData.isPartyRotor) return;
+    const positions = node.geometry.attributes.position;
+    const stride = Math.max(1, Math.ceil(positions.count / 1800));
+    const extrema = Array.from({ length: 6 }, () => ({ value: 0, point: new THREE.Vector3() }));
+    extrema[0].value = Infinity;
+    extrema[1].value = -Infinity;
+    extrema[2].value = Infinity;
+    extrema[3].value = -Infinity;
+    extrema[4].value = Infinity;
+    extrema[5].value = -Infinity;
+    for (let index = 0; index < positions.count; index += 1) {
+      flightGroundSupportOffset.fromBufferAttribute(positions, index)
+        .applyMatrix4(node.matrixWorld)
+        .applyMatrix4(inverseShowDroneMatrix);
+      if (index % stride === 0) addPoint(flightGroundSupportOffset);
+      for (let axis = 0; axis < 3; axis += 1) {
+        const coordinate = axis === 0 ? flightGroundSupportOffset.x : axis === 1 ? flightGroundSupportOffset.y : flightGroundSupportOffset.z;
+        const minSlot = axis * 2;
+        const maxSlot = minSlot + 1;
+        if (coordinate < extrema[minSlot].value) {
+          extrema[minSlot].value = coordinate;
+          extrema[minSlot].point.copy(flightGroundSupportOffset);
+        }
+        if (coordinate > extrema[maxSlot].value) {
+          extrema[maxSlot].value = coordinate;
+          extrema[maxSlot].point.copy(flightGroundSupportOffset);
+        }
+      }
+    }
+    extrema.forEach(({ point }) => addPoint(point));
   });
-  return clearance;
+  if (supportOffsets.length) flightDroneGroundSupportOffsets = supportOffsets;
+}
+
+function flightGroundContactOffset(orientation = flight.orientation) {
+  flightDroneInverseOrientation.copy(orientation).invert();
+  flightGroundUpLocal.copy(axisY).applyQuaternion(flightDroneInverseOrientation);
+  let lowestY = Infinity;
+  for (const supportOffset of flightDroneGroundSupportOffsets) {
+    const projectedY = supportOffset.x * showDrone.scale.x * flightGroundUpLocal.x
+      + supportOffset.y * showDrone.scale.y * flightGroundUpLocal.y
+      + supportOffset.z * showDrone.scale.z * flightGroundUpLocal.z;
+    lowestY = Math.min(lowestY, projectedY);
+  }
+  flightGroundContactPoint.set(0, 0, 0);
+  let contactCount = 0;
+  for (const supportOffset of flightDroneGroundSupportOffsets) {
+    const projectedY = supportOffset.x * showDrone.scale.x * flightGroundUpLocal.x
+      + supportOffset.y * showDrone.scale.y * flightGroundUpLocal.y
+      + supportOffset.z * showDrone.scale.z * flightGroundUpLocal.z;
+    if (projectedY > lowestY + 0.015) continue;
+    flightGroundContactPoint.add(flightGroundSupportOffset.set(
+      supportOffset.x * showDrone.scale.x,
+      supportOffset.y * showDrone.scale.y,
+      supportOffset.z * showDrone.scale.z,
+    ).applyQuaternion(orientation));
+    contactCount += 1;
+  }
+  if (contactCount) flightGroundContactPoint.multiplyScalar(1 / contactCount);
+  return flightGroundContactPoint;
+}
+
+function applyFlightGroundContactPhysics(dt, groundY, groundClearance) {
+  if (groundY <= -9990 || flight.position.y > groundY + groundClearance + 0.02) return false;
+  if (flight.velocity.y < -0.6) flight.velocity.y *= -0.14;
+  else if (flight.velocity.y < 0) flight.velocity.y = 0;
+  const groundFriction = Math.exp(-(flightDamageState.crashed || flightDamageState.brokenProps.some(Boolean) ? 2.4 : 0.35) * dt);
+  flight.velocity.x *= groundFriction;
+  flight.velocity.z *= groundFriction;
+
+  if (flightDamageState.crashed || flightDamageState.brokenProps.some(Boolean)) {
+    flightGroundContactTorque.crossVectors(flightGroundContactOffset(), axisY);
+    flight.impactAngularVelocity.addScaledVector(
+      flightGroundContactTorque,
+      9.81 * flightCollisionInverseInertia * dt,
+    );
+    const rotationDamping = Math.exp(-2.4 * dt);
+    flight.impactAngularVelocity.multiplyScalar(rotationDamping);
+    flight.bodyAngularVelocity.multiplyScalar(rotationDamping);
+  }
+  return true;
+}
+
+function breakFlightPropsOnGroundContact(groundY) {
+  if (groundY <= -9990 || !propellers.length) return;
+  if (flight.position.y > groundY + 4) return;
+  const downwardImpactSpeed = Math.max(0, -flight.velocity.y);
+  const horizontalGroundSpeed = Math.hypot(flight.velocity.x, flight.velocity.z);
+  if (downwardImpactSpeed < 1.5 && horizontalGroundSpeed < flightPropellerBreakImpactSpeed) return;
+  syncFlightDroneModelTransform();
+  showDrone.updateMatrixWorld(true);
+  flightDroneInverseOrientation.copy(flight.orientation).invert();
+  const touchedMotors = [];
+  propellers.forEach((rotor) => {
+    if (!rotor.visible) return;
+    rotor.updateWorldMatrix(true, true);
+    flightGroundProbeBounds.setFromObject(rotor);
+    if (flightGroundProbeBounds.min.y > groundY + 0.006) return;
+    rotor.getWorldPosition(flightDroneRotorWorldPosition);
+    flightDroneMotorLocalPosition.copy(flightDroneRotorWorldPosition)
+      .sub(flight.position)
+      .applyQuaternion(flightDroneInverseOrientation);
+    const motorIndex = (flightDroneMotorLocalPosition.x < 0 ? 0 : 2)
+      + (flightDroneMotorLocalPosition.z >= 0 ? 1 : 0);
+    if (!flightDamageState.brokenProps[motorIndex] && !touchedMotors.includes(motorIndex)) touchedMotors.push(motorIndex);
+  });
+  if (!touchedMotors.length) return;
+  touchedMotors.forEach((motorIndex) => breakFlightPropeller(motorIndex, flightGroundContactNormal));
+  updateFlightDamageIndicator();
 }
 
 function addOpenField() {
@@ -7922,6 +8065,206 @@ function applyDronePropColor(color) {
   displayedDronePropMeshes.forEach((mesh) => { mesh.material = dronePropColorMaterial; });
 }
 
+function registerFlightArmDamageMesh(mesh) {
+  if (!mesh?.geometry?.attributes?.position) return;
+  const armSlots = new Set(mesh.userData.droneArmGlowMaterialSlots || []);
+  const wholeMeshIsArm = mesh.userData.isDroneArmGlowMaterial === true;
+  if (!armSlots.size && !wholeMeshIsArm) return;
+  mesh.geometry = mesh.geometry.clone();
+  const geometry = mesh.geometry;
+  const positions = geometry.attributes.position;
+  const index = geometry.index;
+  geometry.computeBoundingBox();
+  const origin = geometry.boundingBox.getCenter(new THREE.Vector3());
+  const arms = [];
+
+  const wholeGeometry = wholeMeshIsArm || !geometry.groups.length;
+  if (wholeGeometry) {
+    const quadrants = Array.from({ length: 4 }, () => []);
+    const seen = new Set();
+    const vertexCount = index ? index.count : positions.count;
+    for (let cursor = 0; cursor < vertexCount; cursor += 1) {
+      const vertexIndex = index ? index.getX(cursor) : cursor;
+      if (seen.has(vertexIndex)) continue;
+      seen.add(vertexIndex);
+      const dx = positions.getX(vertexIndex) - origin.x;
+      const dz = positions.getZ(vertexIndex) - origin.z;
+      const motorIndex = (dx < 0 ? 0 : 2) + (dz >= 0 ? 1 : 0);
+      quadrants[motorIndex].push(vertexIndex);
+    }
+    quadrants.forEach((vertexIndices, motorIndex) => {
+      const center = new THREE.Vector3();
+      let maxRadius = 0;
+      let tipVertex = -1;
+      vertexIndices.forEach((vertexIndex) => {
+        const x = positions.getX(vertexIndex);
+        const y = positions.getY(vertexIndex);
+        const z = positions.getZ(vertexIndex);
+        center.x += x;
+        center.y += y;
+        center.z += z;
+        const radius = Math.hypot(x - origin.x, z - origin.z);
+        if (radius > maxRadius) {
+          maxRadius = radius;
+          tipVertex = vertexIndex;
+        }
+      });
+      if (!vertexIndices.length || maxRadius < 0.0001) return;
+      center.multiplyScalar(1 / vertexIndices.length);
+      arms.push({ center, maxRadius, vertexIndices, tipVertex, motorIndex });
+    });
+  } else geometry.groups.forEach((group) => {
+    if (!armSlots.has(group.materialIndex)) return;
+    const first = Math.max(0, group.start);
+    const end = Math.min(group.start + group.count, index ? index.count : positions.count);
+    const vertexIndices = new Set();
+    const center = new THREE.Vector3();
+    let maxRadius = 0;
+    let tipVertex = -1;
+    for (let cursor = first; cursor < end; cursor += 1) {
+      const vertexIndex = index ? index.getX(cursor) : cursor;
+      if (vertexIndices.has(vertexIndex)) continue;
+      vertexIndices.add(vertexIndex);
+      const x = positions.getX(vertexIndex);
+      const y = positions.getY(vertexIndex);
+      const z = positions.getZ(vertexIndex);
+      center.x += x;
+      center.y += y;
+      center.z += z;
+      const radius = Math.hypot(x - origin.x, z - origin.z);
+      if (radius > maxRadius) {
+        maxRadius = radius;
+        tipVertex = vertexIndex;
+      }
+    }
+    if (!vertexIndices.size || maxRadius < 0.0001) return;
+    center.multiplyScalar(1 / vertexIndices.size);
+    arms.push({ center, maxRadius, vertexIndices: [...vertexIndices], tipVertex, motorIndex: 0 });
+  });
+
+  if (arms.length) {
+    flightArmDamageMeshes.push({
+      mesh,
+      geometry,
+      origin,
+      basePositions: new Float32Array(positions.array),
+      arms,
+    });
+  }
+}
+
+function assignFlightArmMotors() {
+  if (!propellers.length || !flightArmDamageMeshes.length) return;
+  showDrone.updateWorldMatrix(true, true);
+  const motors = propellers.map((rotor) => {
+    const position = rotor.getWorldPosition(new THREE.Vector3());
+    return showDrone.worldToLocal(position);
+  });
+  flightArmDamageMeshes.forEach(({ mesh, arms }) => {
+    mesh.updateWorldMatrix(true, false);
+    arms.forEach((arm) => {
+      const armCenter = arm.center.clone().applyMatrix4(mesh.matrixWorld);
+      showDrone.worldToLocal(armCenter);
+      let nearestMotor = 0;
+      let nearestDistance = Infinity;
+      motors.forEach((motor, motorIndex) => {
+        const distance = armCenter.distanceToSquared(motor);
+        if (distance >= nearestDistance) return;
+        nearestDistance = distance;
+        nearestMotor = motorIndex;
+      });
+      arm.motorIndex = nearestMotor;
+    });
+  });
+}
+
+function deformFlightArmsForDestruction() {
+  if (!flightArmDamageMeshes.length) return;
+  const verticalBends = [0.62, -0.72, 0.56, -0.66];
+  const lateralBends = [-0.42, 0.5, 0.38, -0.46];
+  flightArmDamageMeshes.forEach(({ geometry, basePositions }) => {
+    geometry.attributes.position.array.set(basePositions);
+  });
+  propellers.forEach((rotor) => {
+    if (rotor.userData.flightArmBasePosition) rotor.position.copy(rotor.userData.flightArmBasePosition);
+  });
+  flightArmDamageMeshes.forEach(({ geometry, origin, basePositions, arms }) => {
+    const positions = geometry.attributes.position;
+    arms.forEach((arm) => {
+      if (!flightDamageState.brokenArms[arm.motorIndex]) return;
+      const motorIndex = arm.motorIndex % verticalBends.length;
+      const maxRadius = Math.max(0.0001, arm.maxRadius);
+      arm.vertexIndices.forEach((vertexIndex) => {
+        const offset = vertexIndex * 3;
+        const x = basePositions[offset];
+        const y = basePositions[offset + 1];
+        const z = basePositions[offset + 2];
+        const dx = x - origin.x;
+        const dz = z - origin.z;
+        const radius = Math.hypot(dx, dz);
+        const alongArm = THREE.MathUtils.clamp((radius / maxRadius - 0.2) / 0.68, 0, 1);
+        const bend = alongArm * alongArm * (3 - 2 * alongArm);
+        const side = lateralBends[motorIndex] * maxRadius * bend;
+        const inverseRadius = radius > 0.001 ? 1 / radius : 0;
+        positions.setXYZ(
+          vertexIndex,
+          x - dz * inverseRadius * side,
+          y + verticalBends[motorIndex] * maxRadius * bend,
+          z + dx * inverseRadius * side,
+        );
+      });
+      const rotor = propellers[arm.motorIndex];
+      if (rotor?.parent && arm.tipVertex >= 0) {
+        const offset = arm.tipVertex * 3;
+        const x = basePositions[offset];
+        const y = basePositions[offset + 1];
+        const z = basePositions[offset + 2];
+        const dx = x - origin.x;
+        const dz = z - origin.z;
+        const radius = Math.hypot(dx, dz);
+        const alongArm = THREE.MathUtils.clamp((radius / maxRadius - 0.2) / 0.68, 0, 1);
+        const bend = alongArm * alongArm * (3 - 2 * alongArm);
+        const side = lateralBends[motorIndex] * maxRadius * bend;
+        const inverseRadius = radius > 0.001 ? 1 / radius : 0;
+        flightDroneRotorWorldPosition.set(
+          x - dz * inverseRadius * side,
+          y + verticalBends[motorIndex] * maxRadius * bend,
+          z + dx * inverseRadius * side,
+        );
+        const bentWorldPosition = flightDroneRotorWorldPosition.clone().applyMatrix4(arm.mesh.matrixWorld);
+        const originalWorldPosition = new THREE.Vector3(x, y, z).applyMatrix4(arm.mesh.matrixWorld);
+        rotor.parent.updateWorldMatrix(true, false);
+        const originalParentPosition = rotor.parent.worldToLocal(originalWorldPosition);
+        const bentParentPosition = rotor.parent.worldToLocal(bentWorldPosition);
+        if (rotor.userData.flightArmBasePosition) {
+          rotor.position.copy(rotor.userData.flightArmBasePosition)
+            .add(bentParentPosition.sub(originalParentPosition));
+        }
+      }
+    });
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+  });
+  refreshFlightGroundSupportOffsets();
+}
+
+function resetFlightArmDeformation() {
+  flightArmDamageMeshes.forEach(({ geometry, basePositions }) => {
+    const positions = geometry.attributes.position;
+    positions.array.set(basePositions);
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+  });
+  propellers.forEach((rotor) => {
+    if (rotor.userData.flightArmBasePosition) rotor.position.copy(rotor.userData.flightArmBasePosition);
+  });
+  refreshFlightGroundSupportOffsets();
+}
+
 async function loadDroneShowcaseModel() {
   try {
     const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
@@ -8005,14 +8348,25 @@ async function loadDroneShowcaseModel() {
     droneAssembly.updateMatrixWorld(true);
     const droneBounds = new THREE.Box3().setFromObject(droneAssembly);
     if (droneBounds.isEmpty()) throw new Error('The drone GLB has no visible geometry.');
+    const droneGroundBounds = new THREE.Box3();
+    droneAssembly.traverse((node) => {
+      if (!node.isMesh) return;
+      let ancestor = node.parent;
+      while (ancestor && ancestor !== droneAssembly && !ancestor.userData.isPartyRotor) ancestor = ancestor.parent;
+      if (ancestor?.userData.isPartyRotor) return;
+      droneGroundBounds.expandByObject(node);
+    });
+    if (droneGroundBounds.isEmpty()) droneGroundBounds.copy(droneBounds);
     const droneSize = droneBounds.getSize(new THREE.Vector3());
     const droneCenter = droneBounds.getCenter(new THREE.Vector3());
     const modelScale = 3.5 / Math.max(droneSize.x, droneSize.z);
-    flightDroneModelHalfExtents.set(
-      droneSize.x * modelScale * 0.5,
-      droneSize.y * modelScale * 0.5,
-      droneSize.z * modelScale * 0.5,
-    );
+    flightDroneGroundSupportOffsets.forEach((offset, corner) => {
+      offset.set(
+        corner & 1 ? droneGroundBounds.max.x : droneGroundBounds.min.x,
+        corner & 2 ? droneGroundBounds.max.y : droneGroundBounds.min.y,
+        corner & 4 ? droneGroundBounds.max.z : droneGroundBounds.min.z,
+      ).sub(droneCenter).multiplyScalar(modelScale);
+    });
     const normalizedDrone = new THREE.Group();
     normalizedDrone.position.copy(droneCenter).multiplyScalar(-modelScale);
     normalizedDrone.scale.setScalar(modelScale);
@@ -8051,6 +8405,10 @@ async function loadDroneShowcaseModel() {
           node.userData.droneBodyColorMaterialSlots = [...node.userData.droneBodyColorMaterialSlots];
           displayedDroneBodyMeshes.add(node);
         }
+        if (drone === showDrone && node.isMesh
+          && (node.userData.droneArmGlowMaterialSlots?.length || node.userData.isDroneArmGlowMaterial)) {
+          registerFlightArmDamageMesh(node);
+        }
         if (node.isMesh && node.userData.isDronePropColor) {
           node.material = dronePropColorMaterial;
           displayedDronePropMeshes.add(node);
@@ -8075,11 +8433,14 @@ async function loadDroneShowcaseModel() {
       drone.add(model);
     };
     propellers.length = 0;
+    flightArmDamageMeshes.length = 0;
     partyDroneRotors.forEach((rotors) => { rotors.length = 0; });
     livePartyDroneRotors.forEach((rotors) => { rotors.length = 0; });
     addModel(showDrone, null);
     partyDroneObjects.forEach((drone, index) => addModel(drone, partyDroneRotors[index]));
     livePartyDroneObjects.forEach((drone, index) => addModel(drone, livePartyDroneRotors[index]));
+    assignFlightArmMotors();
+    if (flightDamageState.crashed) deformFlightArmsForDestruction();
     applyDroneNeonColor(droneNeonColor);
     applyDroneBodyColor(droneBodyColor);
     applyDronePropColor(dronePropColor);
@@ -8106,6 +8467,7 @@ const authModal = document.querySelector('#authModal');
 let signedInUser = null;
 let partyLobby = null;
 const partyFlightSnapshots = new Map();
+let partyServerClockOffsetMs = 0;
 let gameChatChannel = 'world';
 let gameChatCache = { lobby: [], world: [] };
 let gameChatLobbyCode = '';
@@ -8461,6 +8823,8 @@ let lastGamepad = null;
 let gamepadInput = null;
 let calibration = null;
 const transmitterAxisRoles = ['throttle', 'yaw', 'pitch', 'roll'];
+const transmitterCalibrationAxisTargetRange = 1.9;
+const transmitterCalibrationCenterSampleCount = 30;
 let currentInputSource = '';
 let restartButtonCaptureUntil = 0;
 let resetDroneButtonCaptureUntil = 0;
@@ -8640,7 +9004,7 @@ document.querySelector('#calibrateSticks').addEventListener('click', () => {
     stage: 'center',
     gamepadIndex: lastGamepad.index,
     frames: 0,
-    centerSums: Array(lastGamepad.axes.length).fill(0),
+    centerSamples: [],
     neutralCenters: [],
     minimums: Array(lastGamepad.axes.length).fill(Infinity),
     maximums: Array(lastGamepad.axes.length).fill(-Infinity),
@@ -8713,17 +9077,19 @@ function syncTransmitterCalibrationDialog() {
   if (calibration.stage === 'axis-scan' || calibration.stage === 'axis-result') stepNumber = calibration.roleIndex + 2;
   else if (calibration.stage === 'button') stepNumber = calibration.buttonTarget === 'restart' ? 6 : 7;
   step.textContent = 'STEP ' + stepNumber + ' OF 7';
-  progress.max = calibration.stage === 'center' ? 90 : 180;
-  progress.value = calibration.stage === 'center' || calibration.stage === 'axis-scan'
-    ? Math.min(calibration.frames, progress.max)
-    : calibration.stage === 'axis-result' ? 180 : 0;
+  const scanningRange = calibration.axisCandidate?.range || 0;
+  progress.max = calibration.stage === 'center' ? transmitterCalibrationCenterSampleCount : transmitterCalibrationAxisTargetRange;
+  progress.value = calibration.stage === 'center'
+    ? Math.min(calibration.centerSamples.length, progress.max)
+    : calibration.stage === 'axis-scan' ? Math.min(scanningRange, progress.max)
+      : calibration.stage === 'axis-result' ? progress.max : 0;
 
   if (calibration.stage === 'center') {
-    title.textContent = 'Center the flight controls';
-    instructions.textContent = 'Keep yaw, pitch, and roll centered. Hold throttle at its minimum while the transmitter is sampled.';
-    status.textContent = 'SAMPLING CENTER...';
-    action.disabled = true;
-    action.textContent = 'CAPTURING CENTER...';
+    title.textContent = 'Center controls';
+    instructions.textContent = 'Center sticks. Throttle at minimum.';
+    status.textContent = 'Click Ready when set.';
+    action.disabled = false;
+    action.textContent = 'READY';
     return;
   }
 
@@ -8731,39 +9097,37 @@ function syncTransmitterCalibrationDialog() {
     const role = transmitterAxisRoles[calibration.roleIndex];
     const label = role.toUpperCase();
     const prompts = {
-      throttle: 'Move only throttle from minimum to maximum and back several times. Keep yaw, pitch, and roll still.',
-      yaw: 'Move only yaw fully left and right several times. Keep throttle, pitch, and roll still.',
-      pitch: 'Push only pitch fully forward and pull it back several times. Keep the other controls still.',
-      roll: 'Move only roll fully left and right several times. Keep the other controls still.',
+      throttle: 'Sweep throttle from minimum to maximum and back. Keep sticks centered.',
+      yaw: 'Sweep yaw fully left and right. Keep other controls centered.',
+      pitch: 'Sweep pitch fully forward and back. Keep other controls centered.',
+      roll: 'Sweep roll fully left and right. Keep other controls centered.',
     };
     title.textContent = 'Map ' + label;
     instructions.textContent = prompts[role];
     if (calibration.stage === 'axis-scan') {
-      status.textContent = 'MOVE ' + label + ' ONLY / DETECTING AXIS...';
-      action.disabled = true;
-      action.textContent = 'MOVE CONTROL...';
+      const progressPercent = Math.min(200, Math.round(scanningRange / transmitterCalibrationAxisTargetRange * 200));
+      status.textContent = 'Travel: ' + progressPercent + '% / 200%.';
+      action.disabled = scanningRange < 0.55;
+      action.textContent = action.disabled ? 'MOVE TO 200%' : 'USE AXIS';
       return;
     }
     if (calibration.axisCandidate) {
-      status.textContent = label + ' DETECTED ON AXIS ' + (calibration.axisCandidate.index + 1)
-        + ' / RANGE ' + (calibration.axisCandidate.range * 100).toFixed(0) + '%';
+      status.textContent = 'Axis ' + (calibration.axisCandidate.index + 1) + ' detected.';
       action.disabled = false;
       action.textContent = 'USE AXIS ' + (calibration.axisCandidate.index + 1);
     } else {
-      status.textContent = 'NO CLEAR ' + label + ' AXIS FOUND / MOVE THAT CONTROL FULLY AND RETRY';
+      status.textContent = 'No axis detected. Try again.';
       action.disabled = false;
-      action.textContent = 'RETRY THIS AXIS';
+      action.textContent = 'RETRY';
     }
     return;
   }
 
   title.textContent = calibration.buttonTarget === 'restart' ? 'Bind race restart' : 'Bind drone reset';
-  instructions.textContent = calibration.buttonTarget === 'restart'
-    ? 'Press the controller button you want to use to restart a solo race.'
-    : 'Press a different controller button to reset the drone at its current position.';
-  status.textContent = calibration.message || 'RELEASE ALL BUTTONS, THEN PRESS THE BUTTON TO BIND';
+  instructions.textContent = 'Release all buttons, then press one to bind.';
+  status.textContent = calibration.message || 'Release all buttons.';
   action.disabled = true;
-  action.textContent = 'PRESS A BUTTON';
+  action.textContent = 'PRESS BUTTON';
 }
 
 function cancelTransmitterCalibration(message = '') {
@@ -8799,7 +9163,19 @@ document.querySelector('#transmitterCalibrationDialog').addEventListener('cancel
   cancelTransmitterCalibration();
 });
 document.querySelector('#calibrationAction').addEventListener('click', () => {
-  if (calibration?.stage === 'axis-result') mapDetectedTransmitterAxis();
+  if (calibration?.stage === 'center') {
+    const samples = calibration.centerSamples;
+    const fallbackAxes = lastGamepad?.axes || [];
+    calibration.neutralCenters = Array.from({ length: fallbackAxes.length }, (_, index) => {
+      if (!samples.length) return Number(fallbackAxes[index]) || 0;
+      return samples.reduce((sum, sample) => sum + (Number(sample[index]) || 0), 0) / samples.length;
+    });
+    calibration.roleIndex = 0;
+    startTransmitterAxisScan();
+  } else if (calibration?.stage === 'axis-scan' && calibration.axisCandidate?.range >= 0.55) {
+    calibration.stage = 'axis-result';
+    mapDetectedTransmitterAxis();
+  } else if (calibration?.stage === 'axis-result') mapDetectedTransmitterAxis();
 });
 
 function shapeStick(value) {
@@ -9067,21 +9443,21 @@ function pollRestartGamepadButtons(pad) {
       if (calibration.awaitButtonRelease) {
         if (!buttonStates.some(Boolean)) {
           calibration.awaitButtonRelease = false;
-          calibration.message = 'NOW PRESS THE BUTTON TO BIND';
+          calibration.message = 'Press a button.';
           syncTransmitterCalibrationDialog();
         }
       } else {
         const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
         if (pressedIndex >= 0) {
           if (calibration.buttonTarget === 'resetDrone' && inputConfig.restartButton === pressedIndex) {
-            calibration.message = 'BUTTON ' + (pressedIndex + 1) + ' IS ALREADY USED FOR RESTART. PRESS A DIFFERENT BUTTON.';
+            calibration.message = 'Already used. Press another.';
             syncTransmitterCalibrationDialog();
           } else if (calibration.buttonTarget === 'restart') {
             inputConfig.restartButton = pressedIndex;
             if (inputConfig.resetDroneButton === pressedIndex) inputConfig.resetDroneButton = null;
             calibration.buttonTarget = 'resetDrone';
             calibration.awaitButtonRelease = true;
-            calibration.message = 'RESTART BOUND TO BUTTON ' + (pressedIndex + 1) + '. RELEASE IT TO CONTINUE.';
+            calibration.message = 'Restart: button ' + (pressedIndex + 1) + '. Release to continue.';
             syncTransmitterCalibrationDialog();
           } else {
             inputConfig.resetDroneButton = pressedIndex;
@@ -9165,17 +9541,9 @@ function sampleGamepad() {
     if (pad.index !== calibration.gamepadIndex) {
       cancelTransmitterCalibration('The active controller changed. Start transmitter setup again.');
     } else if (calibration.stage === 'center') {
-      for (let index = 0; index < Math.min(pad.axes.length, calibration.centerSums.length); index += 1) {
-        calibration.centerSums[index] += Number(pad.axes[index]) || 0;
-      }
-      calibration.frames += 1;
-      if (calibration.frames >= 90) {
-        calibration.neutralCenters = calibration.centerSums.map((sum) => sum / calibration.frames);
-        calibration.roleIndex = 0;
-        startTransmitterAxisScan();
-      } else {
-        syncTransmitterCalibrationDialog();
-      }
+      calibration.centerSamples.push(Array.from(pad.axes, (value) => Number(value) || 0));
+      if (calibration.centerSamples.length > transmitterCalibrationCenterSampleCount) calibration.centerSamples.shift();
+      syncTransmitterCalibrationDialog();
     } else if (calibration.stage === 'axis-scan') {
       for (let index = 0; index < Math.min(pad.axes.length, calibration.minimums.length); index += 1) {
         const value = Number(pad.axes[index]) || 0;
@@ -9183,22 +9551,20 @@ function sampleGamepad() {
         calibration.maximums[index] = Math.max(calibration.maximums[index], value);
       }
       calibration.frames += 1;
-      if (calibration.frames >= 180) {
-        const usedAxes = new Set(transmitterAxisRoles.slice(0, calibration.roleIndex)
-          .map((role) => Number(inputConfig.axes[role])));
-        let best = null;
-        for (let index = 0; index < calibration.minimums.length; index += 1) {
-          if (usedAxes.has(index)) continue;
-          const min = calibration.minimums[index];
-          const max = calibration.maximums[index];
-          const range = max - min;
-          if (!Number.isFinite(range) || range < 0.55) continue;
-          if (!best || range > best.range) best = { index, min, max, range };
-        }
-        calibration.axisCandidate = best;
-        calibration.stage = 'axis-result';
+      const usedAxes = new Set(transmitterAxisRoles.slice(0, calibration.roleIndex)
+        .map((role) => Number(inputConfig.axes[role])));
+      let best = null;
+      for (let index = 0; index < calibration.minimums.length; index += 1) {
+        if (usedAxes.has(index)) continue;
+        const min = calibration.minimums[index];
+        const max = calibration.maximums[index];
+        const range = max - min;
+        if (!Number.isFinite(range) || range < 0.55) continue;
+        if (!best || range > best.range) best = { index, min, max, range };
       }
-      syncTransmitterCalibrationDialog();
+      calibration.axisCandidate = best;
+      if (best && best.range >= transmitterCalibrationAxisTargetRange) mapDetectedTransmitterAxis();
+      else syncTransmitterCalibrationDialog();
     }
   }
 
@@ -9388,6 +9754,7 @@ async function syncPartyFlightPositions() {
       orientation: flight.orientation.toArray(),
     });
     if (!flying || partyLobby?.code !== lobbyCode || signedInUser?.id !== userId) return;
+    if (Number.isFinite(result.serverTime)) partyServerClockOffsetMs = result.serverTime - Date.now();
     partyFlightSnapshots.clear();
     for (const state of result.states || []) {
       if (!Array.isArray(state.position) || !Array.isArray(state.velocity) || !Array.isArray(state.orientation)) continue;
@@ -9395,6 +9762,7 @@ async function syncPartyFlightPositions() {
         position: new THREE.Vector3().fromArray(state.position),
         velocity: new THREE.Vector3().fromArray(state.velocity),
         orientation: new THREE.Quaternion().fromArray(state.orientation).normalize(),
+        raceTimeMs: Number.isFinite(state.raceTimeMs) ? Math.max(0, state.raceTimeMs) : null,
         receivedAt: performance.now(),
       });
     }
@@ -10299,25 +10667,52 @@ function updateRaceStartOverlay() {
   detail.textContent = nextDetail;
 }
 
+let raceLeaderboardLastRenderAt = 0;
+
 function updateRaceLeaderboard() {
   const panel = document.querySelector('#raceLeaderboard');
   const rows = document.querySelector('#raceLeaderboardRows');
   if (!panel || !rows) return;
-  const show = Boolean(flying && partyLobby && partyLobby.gameMode !== 'relay-race' && ['grid', 'race'].includes(partyRacePhase));
+  const soloRace = Boolean(flying && !partyLobby && raceTimerEnabled);
+  const partyRace = Boolean(flying && partyLobby && partyLobby.gameMode !== 'relay-race' && ['grid', 'race'].includes(partyRacePhase));
+  const show = soloRace || partyRace;
+  const wasHidden = panel.hidden;
   panel.hidden = !show;
-  if (!show) return;
+  if (!show) {
+    raceLeaderboardLastRenderAt = 0;
+    return;
+  }
+  const now = performance.now();
+  if (!wasHidden && now - raceLeaderboardLastRenderAt < 100) return;
+  raceLeaderboardLastRenderAt = now;
   const total = Math.max(1, flightCourseEntries.length);
-  const ordered = partyLobby.members.map((member) => {
-    const isLocal = member.id === signedInUser?.id;
+  const members = partyLobby
+    ? partyLobby.members
+    : [{ id: signedInUser?.id || 'local-pilot', username: signedInUser?.username || 'PILOT', nextGateIndex: routeProgress, finishedAt: raceTimerFinishedAt || null }];
+  const ordered = members.map((member) => {
+    const isLocal = partyLobby ? member.id === signedInUser?.id : true;
     const localProgress = isLocal ? Math.max(Number(member.nextGateIndex) || 0, routeProgress) : Number(member.nextGateIndex) || 0;
-    return { ...member, isLocal, progress: localProgress };
+    const syncedTime = partyFlightSnapshots.get(member.id)?.raceTimeMs;
+    const startedAt = Number(member.raceStartedAt) || 0;
+    const serverTime = Number(member.finishedAt) || (Date.now() + partyServerClockOffsetMs);
+    const localRaceTimeMs = raceTimerStartedAt
+      ? Math.max(0, (raceTimerFinishedAt || performance.now()) - raceTimerStartedAt)
+      : null;
+    const raceTimeMs = !partyLobby && isLocal && localRaceTimeMs !== null
+      ? localRaceTimeMs
+      : Number.isFinite(syncedTime)
+        ? syncedTime
+        : startedAt
+          ? Math.max(0, serverTime - startedAt)
+          : isLocal ? localRaceTimeMs : null;
+    return { ...member, isLocal, progress: localProgress, raceTimeMs };
   }).sort((a, b) => {
     if (Boolean(a.finishedAt) !== Boolean(b.finishedAt)) return a.finishedAt ? -1 : 1;
     if (a.finishedAt && b.finishedAt) return Number(a.finishedAt) - Number(b.finishedAt);
     if (a.progress !== b.progress) return b.progress - a.progress;
     return Number(b.lastCheckpointAt || 0) - Number(a.lastCheckpointAt || 0);
   });
-  const leaderEstablished = Boolean(ordered[0]?.finishedAt || ordered[0]?.progress > 0);
+  const leaderEstablished = Boolean(!partyLobby || ordered[0]?.finishedAt || ordered[0]?.progress > 0);
   rows.replaceChildren();
   ordered.forEach((member, index) => {
     const row = document.createElement('li');
@@ -10328,10 +10723,15 @@ function updateRaceLeaderboard() {
     const name = document.createElement('span');
     name.className = 'race-leaderboard-name';
     name.textContent = member.username;
+    const time = document.createElement('time');
+    time.className = 'race-leaderboard-time';
+    time.textContent = member.raceTimeMs === null
+      ? member.isLocal && !partyLobby ? 'BLOCK' : '--:--.--'
+      : formatRaceDuration(member.raceTimeMs);
     const progress = document.createElement('small');
     progress.className = 'race-leaderboard-progress';
     progress.textContent = member.finishedAt ? 'FIN' : `${Math.min(total, member.progress)}/${total}`;
-    row.append(place, name, progress);
+    row.append(place, name, time, progress);
     rows.append(row);
   });
 }
@@ -11591,8 +11991,7 @@ function spawnDetachedDronePart(motorIndex, part, impactNormal = null) {
       (Math.random() - 0.5) * 15,
       (Math.random() - 0.5) * 12,
     ),
-    age: 0,
-    life: 12 + Math.random() * 4,
+    settled: false,
     ownsGeometry: true,
   });
 }
@@ -11600,6 +11999,8 @@ function spawnDetachedDronePart(motorIndex, part, impactNormal = null) {
 function breakFlightPropeller(motorIndex, impactNormal) {
   if (motorIndex < 0 || flightDamageState.brokenProps[motorIndex]) return;
   flightDamageState.brokenProps[motorIndex] = true;
+  flight.throttle = 0;
+  flight.motorOutput = 0;
   spawnDetachedDronePart(motorIndex, 'prop', impactNormal);
   showToast('Propeller snapped off. Flight control is damaged.');
 }
@@ -11609,6 +12010,8 @@ function breakFlightArm(motorIndex, impactNormal) {
   const motorAssemblyStillAttached = !flightDamageState.brokenProps[motorIndex];
   flightDamageState.brokenArms[motorIndex] = true;
   flightDamageState.brokenProps[motorIndex] = true;
+  flight.throttle = 0;
+  flight.motorOutput = 0;
   if (motorAssemblyStillAttached) spawnDetachedDronePart(motorIndex, 'arm', impactNormal);
   showToast('Drone arm broke off. Flight control is severely damaged.');
 }
@@ -11658,6 +12061,7 @@ function beginFlightFireCrash() {
   if (flightDamageState.crashed) return;
   flightDamageState.burning = true;
   flightDamageState.crashed = true;
+  deformFlightArmsForDestruction();
   flight.throttle = 0;
   flight.motorOutput = 0;
   flight.impactAngularVelocity.add(new THREE.Vector3(
@@ -11729,18 +12133,22 @@ function updateFlightDamageEffects(dt) {
 
   for (let index = flightDebris.length - 1; index >= 0; index -= 1) {
     const piece = flightDebris[index];
-    piece.age += dt;
-    if (piece.age >= piece.life) {
-      piece.object.traverse((object) => object.geometry?.dispose());
-      piece.object.parent?.remove(piece.object);
-      flightDebris.splice(index, 1);
-      continue;
-    }
+    if (piece.settled) continue;
     piece.velocity.y -= 9.81 * dt;
     piece.object.position.addScaledVector(piece.velocity, dt);
     piece.object.rotation.x += piece.rotationSpeed.x * dt;
     piece.object.rotation.y += piece.rotationSpeed.y * dt;
     piece.object.rotation.z += piece.rotationSpeed.z * dt;
+    const groundY = flightDebrisGroundYAt(piece.object.position.x, piece.object.position.z);
+    if (groundY <= -9990) continue;
+    piece.object.updateWorldMatrix(true, true);
+    flightDebrisGroundBounds.setFromObject(piece.object);
+    if (flightDebrisGroundBounds.min.y <= groundY + 0.005) {
+      piece.object.position.y += groundY + 0.006 - flightDebrisGroundBounds.min.y;
+      piece.velocity.set(0, 0, 0);
+      piece.rotationSpeed.set(0, 0, 0);
+      piece.settled = true;
+    }
   }
 }
 
@@ -11800,6 +12208,7 @@ function updateFlightDamageIndicator() {
 
 function resetFlightDamage() {
   clearFlightDamageVisuals();
+  resetFlightArmDeformation();
   propellers.forEach((rotor) => { rotor.visible = true; });
   flightDamageState.damage = 0;
   flightDamageState.brokenProps.fill(false);
@@ -12087,16 +12496,16 @@ function makeFlightGateEntry(gate, role, radius = 2.05, indicator = null, center
   };
 }
 
-function getRacePodiumModel(podium) {
-  let launchModel = podium;
+function getRacePodiumModel(podium, modelIndex = 0) {
+  const launchModels = [];
   podium.traverse((object) => {
-    if (object.userData.isRedRacePodiumModel) launchModel = object;
+    if (object.userData.isRedRacePodiumModel) launchModels.push(object);
   });
-  return launchModel;
+  return launchModels[modelIndex] || launchModels[0] || podium;
 }
 
-function getRacePodiumLaunchYaw(podium) {
-  const launchModel = getRacePodiumModel(podium);
+function getRacePodiumLaunchYaw(podium, modelIndex = 0) {
+  const launchModel = getRacePodiumModel(podium, modelIndex);
   launchModel.updateWorldMatrix(true, false);
   return new THREE.Euler().setFromQuaternion(launchModel.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
 }
@@ -12166,23 +12575,40 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
   const podiums = userPodiumObjects.filter((object) =>
     object.userData.propType === 'podium' || object.userData.propType === 'relay-podium-gate')
     .sort((a, b) => Number(b.userData.isLaunchPodium) - Number(a.userData.isLaunchPodium));
-  const podiumUsernames = partyLobby?.gameMode === 'relay-race'
-    ? Array.from({ length: RELAY_STATION_COUNT }, (_, station) => partyLobby.members
-      .filter((member) => Number(member.relayStation) === station)
+  const relayStationPodiumUsernames = partyLobby?.gameMode === 'relay-race'
+    ? Array.from({ length: RELAY_STATION_COUNT }, (_, station) => [0, 1].map((teamIndex) => partyLobby.members
+      .filter((member) => Number(member.relayStation) === station && Number(member.relayTeam) === teamIndex)
       .map((member) => member.username)
       .filter(Boolean)
-      .join(' / '))
+      .join(' / ')))
+    : null;
+  const podiumUsernames = relayStationPodiumUsernames
+    ? relayStationPodiumUsernames.map((usernames) => usernames.filter(Boolean).join(' / '))
     : partyLobby?.members?.length
       ? partyLobby.members.map((member) => member.username || '')
       : [signedInUser?.username || ''];
-  podiums.forEach((candidate, index) => setRacePodiumUsername(candidate, podiumUsernames[index] || ''));
+  podiums.forEach((candidate, index) => {
+    if (relayStationPodiumUsernames && candidate.userData.propType === 'relay-podium-gate') {
+      const relayPodiumModels = [];
+      candidate.traverse((object) => {
+        if (object.userData.isRedRacePodiumModel) relayPodiumModels.push(object);
+      });
+      relayPodiumModels.forEach((model, sideIndex) => {
+        setRacePodiumUsername(model, relayStationPodiumUsernames[index]?.[sideIndex] || '');
+      });
+      return;
+    }
+    setRacePodiumUsername(candidate, podiumUsernames[index] || '');
+  });
+  const relayTeamIndex = partyLobby?.gameMode === 'relay-race' ? Number(localRelayTeam()?.teamIndex) : 0;
+  const launchModelIndex = relayTeamIndex === 1 ? 1 : 0;
   let podium = podiums[gridSlot] || null;
   let center;
   let yaw;
   if (podium) {
     podium.updateWorldMatrix(true, false);
-    center = getRacePodiumModel(podium).getWorldPosition(new THREE.Vector3());
-    yaw = getRacePodiumLaunchYaw(podium);
+    center = getRacePodiumModel(podium, launchModelIndex).getWorldPosition(new THREE.Vector3());
+    yaw = getRacePodiumLaunchYaw(podium, launchModelIndex);
   } else {
     const platform = new THREE.Group();
     platform.name = 'Automatic race launch podium';
@@ -12192,8 +12618,8 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
     if (podiums.length) {
       offsetBase = podiums[0];
       offsetBase.updateWorldMatrix(true, false);
-      center = getRacePodiumModel(offsetBase).getWorldPosition(new THREE.Vector3());
-      yaw = getRacePodiumLaunchYaw(offsetBase);
+      center = getRacePodiumModel(offsetBase, launchModelIndex).getWorldPosition(new THREE.Vector3());
+      yaw = getRacePodiumLaunchYaw(offsetBase, launchModelIndex);
     } else {
       center = gatePosition.clone().addScaledVector(approachNormal, 12);
       center.y = terrainSurfaceYAt(activeBiome, center.x, center.z);
@@ -16190,6 +16616,7 @@ function updateDestroyedFlight(dt) {
   flight.speed = flight.velocity.length() * 3.6;
   updateFlightDamageEffects(dt);
   updateRaceTimerDisplay();
+  updateRaceLeaderboard();
   updateFlightCamera(dt);
   document.querySelector('#flightPrompt').textContent = 'DRONE DESTROYED. RESET TO RECOVER.';
   document.querySelector('#speedValue').textContent = String(Math.round(flight.speed)).padStart(3, '0');
@@ -16237,8 +16664,12 @@ function updateFlight(dt) {
     updateDestroyedFlight(dt);
     return;
   }
+  const propsBroken = flightDamageState.brokenProps.some(Boolean);
   const controls = getFlightInput();
-  if (controls.source === 'KEYBOARD') {
+  if (propsBroken) {
+    flight.throttle = 0;
+    flight.motorOutput = 0;
+  } else if (controls.source === 'KEYBOARD') {
     flight.throttle = THREE.MathUtils.clamp(flight.throttle + controls.throttleDelta * 0.68 * dt, 0, 1);
   } else {
     flight.throttle += (controls.throttle - flight.throttle) * Math.min(1, dt * 12);
@@ -16293,9 +16724,14 @@ function updateFlight(dt) {
     THREE.MathUtils.clamp(flight.pidAngularAcceleration.z, -maxAngularAcceleration, maxAngularAcceleration),
   );
   const motorResponseAlpha = 1 - Math.exp(-dt / (flightTune.motorResponse / 1000));
-  flight.motorAngularAcceleration.lerp(flight.pidAngularAcceleration, motorResponseAlpha);
-  flight.motorAngularAcceleration.multiplyScalar(motorAuthority);
-  flight.bodyAngularVelocity.addScaledVector(flight.motorAngularAcceleration, dt);
+  if (propsBroken) {
+    flight.motorAngularAcceleration.set(0, 0, 0);
+    flight.bodyAngularVelocity.multiplyScalar(Math.exp(-1.1 * dt));
+  } else {
+    flight.motorAngularAcceleration.lerp(flight.pidAngularAcceleration, motorResponseAlpha);
+    flight.motorAngularAcceleration.multiplyScalar(motorAuthority);
+    flight.bodyAngularVelocity.addScaledVector(flight.motorAngularAcceleration, dt);
+  }
   flightDamageTorque.set(0, 0, 0);
   flightDamageState.brokenProps.forEach((broken, motorIndex) => {
     if (!broken) return;
@@ -16339,8 +16775,9 @@ function updateFlight(dt) {
       propwashIntensity * 2.4 * flightTune.propwash / 100 * (flightTune.propDiameter / 5) * dt,
     );
   }
-  const targetMotorOutput = flight.throttle * flight.throttle;
-  flight.motorOutput += (targetMotorOutput - flight.motorOutput) * motorResponseAlpha;
+  const targetMotorOutput = propsBroken ? 0 : flight.throttle * flight.throttle;
+  if (propsBroken) flight.motorOutput = 0;
+  else flight.motorOutput += (targetMotorOutput - flight.motorOutput) * motorResponseAlpha;
   const maximumThrustAcceleration = motorMaxThrustNewtons * 4 * motorAuthority / vehicleMassKg;
   flight.acceleration.copy(flight.up).multiplyScalar(maximumThrustAcceleration * flight.motorOutput);
   flight.acceleration.y -= 9.81;
@@ -16358,6 +16795,7 @@ function updateFlight(dt) {
     && Math.abs(padPosition.x) <= launchPadState.halfWidth
     && Math.abs(padPosition.z) <= launchPadState.halfDepth);
   if (onLaunchBlock) groundY = Math.max(groundY, launchPadState.topY);
+  breakFlightPropsOnGroundContact(groundY);
   const groundClearance = flightGroundClearance();
   if (flight.position.y < groundY + groundClearance) {
     flight.position.y = groundY + groundClearance;
@@ -16369,9 +16807,31 @@ function updateFlight(dt) {
         normal: new THREE.Vector3(0, 1, 0),
       });
     }
-    if (flight.velocity.y < 0) flight.velocity.y *= -0.14;
-    flight.velocity.x *= 0.9;
-    flight.velocity.z *= 0.9;
+    if (flight.velocity.y < -0.6) flight.velocity.y *= -0.14;
+    else if (flight.velocity.y < 0) flight.velocity.y = 0;
+    const groundSlideRetention = Math.exp(-(flightDamageState.brokenProps.some(Boolean) ? 2.4 : 0.35) * dt);
+    flight.velocity.x *= groundSlideRetention;
+    flight.velocity.z *= groundSlideRetention;
+  }
+
+  const groundedWithBrokenProps = flightDamageState.brokenProps.some(Boolean)
+    && groundY > -9990
+    && flight.position.y <= groundY + groundClearance + 0.02;
+  if (groundedWithBrokenProps) {
+    flight.up.set(0, 1, 0).applyQuaternion(flight.orientation).normalize();
+    const tiltAngle = Math.acos(THREE.MathUtils.clamp(flight.up.y, -1, 1));
+    const tiltAxisMagnitude = flight.angularAxis.crossVectors(flight.up, axisY).length();
+    if (tiltAngle > 0.002) {
+      if (tiltAxisMagnitude > 0.001) flight.angularAxis.multiplyScalar(1 / tiltAxisMagnitude);
+      else flight.angularAxis.copy(axisX);
+      flightDroneInverseOrientation.copy(flight.orientation).invert();
+      flight.angularAxis.applyQuaternion(flightDroneInverseOrientation);
+      const levelingAcceleration = Math.min(1000, THREE.MathUtils.radToDeg(tiltAngle) * 12);
+      flight.bodyAngularVelocity.addScaledVector(flight.angularAxis, levelingAcceleration * dt);
+    }
+    const groundRotationDamping = Math.exp(-4.2 * dt);
+    flight.bodyAngularVelocity.multiplyScalar(groundRotationDamping);
+    flight.impactAngularVelocity.multiplyScalar(groundRotationDamping);
   }
 
   if (launchPadState && !launchPadState.started) {
@@ -16386,6 +16846,7 @@ function updateFlight(dt) {
   updateFlightDamageEffects(dt);
   updateTrackIndicators();
   updateRaceTimerDisplay();
+  updateRaceLeaderboard();
   updateRaceStartOverlay();
   updateFlightCamera(dt);
 
