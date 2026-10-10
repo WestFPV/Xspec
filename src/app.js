@@ -898,7 +898,7 @@ function createMenuPodiumLabel(index) {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   menuPodiumLabels[index] = { canvas, texture, label };
-  return new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+  return new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, side: THREE.DoubleSide });
 }
 
 const redRacePodiumMaterials = {
@@ -1014,7 +1014,7 @@ function setRacePodiumUsername(podium, pilotName) {
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      const material = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+      const material = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, side: THREE.DoubleSide });
       object.userData.podiumUsernameCanvas = canvas;
       object.userData.podiumUsernameTexture = texture;
       object.userData.podiumUsernameMaterial = material;
@@ -7944,8 +7944,12 @@ async function loadDroneShowcaseModel() {
         if (!node.isMesh) return;
         node.castShadow = true;
         node.receiveShadow = true;
+        const nodeMaterials = Array.isArray(node.material) ? node.material : [node.material];
+        if (bodyColor && nodeMaterials.some((material) => material?.name === 'Material.037')) {
+          node.userData.isDroneCameraMount = true;
+        }
         if (bodyColor) {
-          const bodyColorSlots = (Array.isArray(node.material) ? node.material : [node.material]).flatMap((material, index) => {
+          const bodyColorSlots = nodeMaterials.flatMap((material, index) => {
             const color = material?.color;
             if (!color) return [];
             const isBlueBodyPanel = color.b > 0.16 && color.b > color.r * 1.45 && color.b > color.g * 1.12;
@@ -8013,6 +8017,15 @@ async function loadDroneShowcaseModel() {
     normalizedDrone.position.copy(droneCenter).multiplyScalar(-modelScale);
     normalizedDrone.scale.setScalar(modelScale);
     normalizedDrone.add(droneAssembly);
+    normalizedDrone.updateMatrixWorld(true);
+    let windshieldMesh = null;
+    normalizedDrone.traverse((node) => {
+      if (node.isMesh && node.userData.isDroneCameraMount) windshieldMesh = node;
+    });
+    if (windshieldMesh) {
+      const windshieldBounds = new THREE.Box3().setFromObject(windshieldMesh);
+      if (!windshieldBounds.isEmpty()) flightCameraModelOffset.copy(windshieldBounds.getCenter(new THREE.Vector3()));
+    }
 
     const previousGeometries = new Set();
     const previousMaterials = new Set();
@@ -8186,6 +8199,7 @@ function syncGateBadgeVisibility() {
 }
 let hudEnabled = storedSettings.hudEnabled !== false;
 let reticleEnabled = storedSettings.reticleEnabled !== false;
+let firstPersonPropsEnabled = storedSettings.firstPersonPropsEnabled !== false;
 let gameChatEnabled = storedSettings.gameChatEnabled !== false;
 let vignetteEnabled = storedSettings.vignetteEnabled !== false;
 let raceLineEnabled = storedSettings.raceLineEnabled !== false;
@@ -8446,6 +8460,7 @@ let gamepadSignature = '';
 let lastGamepad = null;
 let gamepadInput = null;
 let calibration = null;
+const transmitterAxisRoles = ['throttle', 'yaw', 'pitch', 'roll'];
 let currentInputSource = '';
 let restartButtonCaptureUntil = 0;
 let resetDroneButtonCaptureUntil = 0;
@@ -8508,6 +8523,27 @@ document.querySelector('#toggleStickSetup').addEventListener('click', (event) =>
   button.querySelector('b').textContent = expanded ? '−' : '+';
 });
 
+function syncAxisMapOptions(pad) {
+  if (!pad?.axes.length) return;
+  const labels = ['Axis 1 · Left X', 'Axis 2 · Left Y', 'Axis 3 · Right X', 'Axis 4 · Right Y'];
+  let changed = false;
+  document.querySelectorAll('[data-axis-map]').forEach((select) => {
+    const role = select.dataset.axisMap;
+    let selectedAxis = Number(inputConfig.axes[role]);
+    if (!Number.isInteger(selectedAxis) || selectedAxis < 0 || selectedAxis >= pad.axes.length) {
+      const defaults = { yaw: 0, throttle: 1, roll: 2, pitch: 3 };
+      selectedAxis = Math.min(defaults[role] ?? 0, pad.axes.length - 1);
+      inputConfig.axes[role] = selectedAxis;
+      changed = true;
+    }
+    select.replaceChildren(...Array.from({ length: pad.axes.length }, (_, index) => (
+      new Option(labels[index] || `Axis ${index + 1}`, String(index))
+    )));
+    select.value = String(selectedAxis);
+  });
+  if (changed) saveInputSettings();
+}
+
 function syncInputControls() {
   document.querySelectorAll('[data-axis-map]').forEach((select) => {
     select.value = String(inputConfig.axes[select.dataset.axisMap]);
@@ -8515,8 +8551,6 @@ function syncInputControls() {
   document.querySelectorAll('[data-axis-invert]').forEach((checkbox) => {
     checkbox.checked = Boolean(inputConfig.invert[checkbox.dataset.axisInvert]);
   });
-  document.querySelector('#deadzoneRange').value = String(inputConfig.deadzone);
-  document.querySelector('#deadzoneValue').textContent = `${Math.round(inputConfig.deadzone * 100)}%`;
   syncRaceRestartControls();
 }
 
@@ -8567,11 +8601,6 @@ document.querySelectorAll('[data-axis-invert]').forEach((checkbox) => checkbox.a
   inputConfig.invert[event.currentTarget.dataset.axisInvert] = event.currentTarget.checked;
   saveInputSettings();
 }));
-document.querySelector('#deadzoneRange').addEventListener('input', (event) => {
-  inputConfig.deadzone = Number(event.currentTarget.value);
-  document.querySelector('#deadzoneValue').textContent = `${Math.round(inputConfig.deadzone * 100)}%`;
-  saveInputSettings();
-});
 document.querySelector('#rateTypeSelect').addEventListener('change', (event) => {
   inputConfig.rateType = event.currentTarget.value === 'actual' ? 'actual' : 'betaflight';
   syncRateControls();
@@ -8600,70 +8629,177 @@ document.querySelector('#resetRates').addEventListener('click', () => {
   saveInputSettings();
   showToast(`${mode === 'actual' ? 'Actual' : 'Betaflight'} rates reset to the default profile.`);
 });
-document.querySelector('#calibrateSticks').addEventListener('click', (event) => {
+document.querySelector('#calibrateSticks').addEventListener('click', () => {
   if (!lastGamepad) {
-    showToast('Connect and select a gamepad before calibrating its stick centers.');
+    showToast('Connect and select a gamepad before setting up its axes and buttons.');
     return;
   }
+  restartButtonCaptureUntil = 0;
+  resetDroneButtonCaptureUntil = 0;
   calibration = {
     stage: 'center',
     gamepadIndex: lastGamepad.index,
     frames: 0,
-    centers: Array(lastGamepad.axes.length).fill(0),
+    centerSums: Array(lastGamepad.axes.length).fill(0),
+    neutralCenters: [],
     minimums: Array(lastGamepad.axes.length).fill(Infinity),
     maximums: Array(lastGamepad.axes.length).fill(-Infinity),
+    roleIndex: 0,
+    axisCandidate: null,
+    buttonTarget: 'restart',
+    awaitButtonRelease: true,
+    message: '',
+    original: {
+      axes: { ...inputConfig.axes },
+      invert: { ...inputConfig.invert },
+      centers: [...inputConfig.centers],
+      axisRanges: inputConfig.axisRanges.map((range) => ({ ...range })),
+      restartButton: inputConfig.restartButton,
+      resetDroneButton: inputConfig.resetDroneButton,
+    },
   };
   syncTransmitterCalibrationDialog();
   document.querySelector('#transmitterCalibrationDialog').showModal();
 });
 
+function startTransmitterAxisScan() {
+  if (!calibration) return;
+  calibration.stage = 'axis-scan';
+  calibration.frames = 0;
+  calibration.axisCandidate = null;
+  calibration.minimums.fill(Infinity);
+  calibration.maximums.fill(-Infinity);
+  calibration.message = '';
+  syncTransmitterCalibrationDialog();
+}
+
+function mapDetectedTransmitterAxis() {
+  if (!calibration) return;
+  if (!calibration.axisCandidate) {
+    startTransmitterAxisScan();
+    return;
+  }
+  const role = transmitterAxisRoles[calibration.roleIndex];
+  const { index, min, max } = calibration.axisCandidate;
+  inputConfig.axes[role] = index;
+  inputConfig.centers[index] = calibration.neutralCenters[index] ?? 0;
+  inputConfig.axisRanges[index] = { min, max };
+  if (role === 'throttle') {
+    const lowThrottle = inputConfig.centers[index];
+    inputConfig.invert.throttle = Math.abs(lowThrottle - max) < Math.abs(lowThrottle - min);
+  }
+  syncInputControls();
+  calibration.roleIndex += 1;
+  if (calibration.roleIndex < transmitterAxisRoles.length) {
+    startTransmitterAxisScan();
+    return;
+  }
+  calibration.stage = 'button';
+  calibration.buttonTarget = 'restart';
+  calibration.awaitButtonRelease = true;
+  calibration.message = '';
+  syncTransmitterCalibrationDialog();
+}
+
 function syncTransmitterCalibrationDialog() {
   if (!calibration) return;
-  const centerStage = calibration.stage === 'center';
   const step = document.querySelector('#transmitterCalibrationStep');
   const title = document.querySelector('#transmitterCalibrationTitle');
   const instructions = document.querySelector('#transmitterCalibrationInstructions');
   const progress = document.querySelector('#transmitterCalibrationProgress');
   const status = document.querySelector('#transmitterCalibrationStatus');
   const action = document.querySelector('#calibrationAction');
-  step.textContent = centerStage ? 'STEP 1 OF 2' : 'STEP 2 OF 2';
-  title.textContent = centerStage ? 'Center the controls' : 'Sweep the full stick range';
-  instructions.textContent = centerStage
-    ? 'Hold the sticks centered and throttle at its minimum. Keep every control still while the center position is sampled.'
-    : 'Slowly move each stick to every edge and move the throttle from minimum to maximum. Keep moving until the progress bar finishes.';
-  progress.value = centerStage ? Math.min(calibration.frames, 90) : Math.min(calibration.frames, 180);
-  progress.max = centerStage ? 90 : 180;
-  if (centerStage) {
-    status.textContent = 'SAMPLING CENTER…';
+  let stepNumber = 1;
+  if (calibration.stage === 'axis-scan' || calibration.stage === 'axis-result') stepNumber = calibration.roleIndex + 2;
+  else if (calibration.stage === 'button') stepNumber = calibration.buttonTarget === 'restart' ? 6 : 7;
+  step.textContent = 'STEP ' + stepNumber + ' OF 7';
+  progress.max = calibration.stage === 'center' ? 90 : 180;
+  progress.value = calibration.stage === 'center' || calibration.stage === 'axis-scan'
+    ? Math.min(calibration.frames, progress.max)
+    : calibration.stage === 'axis-result' ? 180 : 0;
+
+  if (calibration.stage === 'center') {
+    title.textContent = 'Center the flight controls';
+    instructions.textContent = 'Keep yaw, pitch, and roll centered. Hold throttle at its minimum while the transmitter is sampled.';
+    status.textContent = 'SAMPLING CENTER...';
     action.disabled = true;
-    action.textContent = 'CAPTURING CENTER…';
-  } else {
-    status.textContent = calibration.frames >= 180 ? 'FULL RANGE CAPTURED · READY TO SAVE' : 'MOVE ALL STICKS THROUGH THEIR FULL TRAVEL…';
-    action.disabled = calibration.frames < 180;
-    action.textContent = action.disabled ? 'CAPTURING RANGE…' : 'FINISH & SAVE';
+    action.textContent = 'CAPTURING CENTER...';
+    return;
   }
+
+  if (calibration.stage === 'axis-scan' || calibration.stage === 'axis-result') {
+    const role = transmitterAxisRoles[calibration.roleIndex];
+    const label = role.toUpperCase();
+    const prompts = {
+      throttle: 'Move only throttle from minimum to maximum and back several times. Keep yaw, pitch, and roll still.',
+      yaw: 'Move only yaw fully left and right several times. Keep throttle, pitch, and roll still.',
+      pitch: 'Push only pitch fully forward and pull it back several times. Keep the other controls still.',
+      roll: 'Move only roll fully left and right several times. Keep the other controls still.',
+    };
+    title.textContent = 'Map ' + label;
+    instructions.textContent = prompts[role];
+    if (calibration.stage === 'axis-scan') {
+      status.textContent = 'MOVE ' + label + ' ONLY / DETECTING AXIS...';
+      action.disabled = true;
+      action.textContent = 'MOVE CONTROL...';
+      return;
+    }
+    if (calibration.axisCandidate) {
+      status.textContent = label + ' DETECTED ON AXIS ' + (calibration.axisCandidate.index + 1)
+        + ' / RANGE ' + (calibration.axisCandidate.range * 100).toFixed(0) + '%';
+      action.disabled = false;
+      action.textContent = 'USE AXIS ' + (calibration.axisCandidate.index + 1);
+    } else {
+      status.textContent = 'NO CLEAR ' + label + ' AXIS FOUND / MOVE THAT CONTROL FULLY AND RETRY';
+      action.disabled = false;
+      action.textContent = 'RETRY THIS AXIS';
+    }
+    return;
+  }
+
+  title.textContent = calibration.buttonTarget === 'restart' ? 'Bind race restart' : 'Bind drone reset';
+  instructions.textContent = calibration.buttonTarget === 'restart'
+    ? 'Press the controller button you want to use to restart a solo race.'
+    : 'Press a different controller button to reset the drone at its current position.';
+  status.textContent = calibration.message || 'RELEASE ALL BUTTONS, THEN PRESS THE BUTTON TO BIND';
+  action.disabled = true;
+  action.textContent = 'PRESS A BUTTON';
 }
 
-function cancelTransmitterCalibration() {
+function cancelTransmitterCalibration(message = '') {
+  if (calibration?.original) {
+    inputConfig.axes = { ...calibration.original.axes };
+    inputConfig.invert = { ...calibration.original.invert };
+    inputConfig.centers = [...calibration.original.centers];
+    inputConfig.axisRanges = calibration.original.axisRanges.map((range) => ({ ...range }));
+    inputConfig.restartButton = calibration.original.restartButton;
+    inputConfig.resetDroneButton = calibration.original.resetDroneButton;
+    saveInputSettings();
+    syncInputControls();
+  }
   calibration = null;
-  document.querySelector('#transmitterCalibrationDialog').close();
+  const dialog = document.querySelector('#transmitterCalibrationDialog');
+  if (dialog.open) dialog.close();
+  if (message) showToast(message);
+}
+
+function finishCalibration() {
+  if (!calibration) return;
+  calibration = null;
+  saveInputSettings();
+  syncInputControls();
+  const dialog = document.querySelector('#transmitterCalibrationDialog');
+  if (dialog.open) dialog.close();
+  showToast('Transmitter setup saved. Throttle, yaw, pitch, roll, and buttons are ready.');
 }
 
 document.querySelector('#calibrationCancel').addEventListener('click', cancelTransmitterCalibration);
-document.querySelector('#transmitterCalibrationDialog').addEventListener('cancel', () => { calibration = null; });
+document.querySelector('#transmitterCalibrationDialog').addEventListener('cancel', (event) => {
+  event.preventDefault();
+  cancelTransmitterCalibration();
+});
 document.querySelector('#calibrationAction').addEventListener('click', () => {
-  if (!calibration || calibration.stage !== 'range' || calibration.frames < 180) return;
-  const mappedAxes = [...new Set(Object.values(inputConfig.axes).map(Number))];
-  const incompleteAxes = mappedAxes.filter((index) => {
-    const minimum = calibration.minimums[index];
-    const maximum = calibration.maximums[index];
-    return !Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum - minimum < 0.75;
-  });
-  if (incompleteAxes.length) {
-    document.querySelector('#transmitterCalibrationStatus').textContent = `AXIS ${incompleteAxes.map((axis) => axis + 1).join(', ')} DID NOT REACH FULL TRAVEL. KEEP MOVING, THEN SAVE AGAIN.`;
-    return;
-  }
-  finishCalibration();
+  if (calibration?.stage === 'axis-result') mapDetectedTransmitterAxis();
 });
 
 function shapeStick(value) {
@@ -8850,6 +8986,12 @@ function normalizedGamepadAxis(raw, index) {
   return THREE.MathUtils.clamp(difference / Math.max(range, 0.15), -1, 1);
 }
 
+function normalizedThrottleAxis(raw, index) {
+  const range = inputConfig.axisRanges[index] || { min: -1, max: 1 };
+  const value = THREE.MathUtils.clamp((raw - range.min) / Math.max(range.max - range.min, 0.15), 0, 1);
+  return inputConfig.invert.throttle ? 1 - value : value;
+}
+
 function readGamepadList() {
   try { return [...(navigator.getGamepads?.() || [])].filter(Boolean); }
   catch { return []; }
@@ -8883,6 +9025,7 @@ function refreshGamepadList(notify = false) {
   select.value = inputConfig.gamepadIndex === null ? '' : String(inputConfig.gamepadIndex);
   const activePad = visibleGamepads.find((pad) => pad.index === inputConfig.gamepadIndex) || null;
   lastGamepad = activePad;
+  syncAxisMapOptions(activePad);
   const led = document.querySelector('#gamepadLed');
   const status = document.querySelector('#gamepadStatus');
   const detail = document.querySelector('#gamepadDetail');
@@ -8919,6 +9062,40 @@ function pollRestartGamepadButtons(pad) {
   }
 
   const buttonStates = pad.buttons.map((button) => Boolean(button.pressed));
+  if (calibration) {
+    if (calibration.stage === 'button') {
+      if (calibration.awaitButtonRelease) {
+        if (!buttonStates.some(Boolean)) {
+          calibration.awaitButtonRelease = false;
+          calibration.message = 'NOW PRESS THE BUTTON TO BIND';
+          syncTransmitterCalibrationDialog();
+        }
+      } else {
+        const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
+        if (pressedIndex >= 0) {
+          if (calibration.buttonTarget === 'resetDrone' && inputConfig.restartButton === pressedIndex) {
+            calibration.message = 'BUTTON ' + (pressedIndex + 1) + ' IS ALREADY USED FOR RESTART. PRESS A DIFFERENT BUTTON.';
+            syncTransmitterCalibrationDialog();
+          } else if (calibration.buttonTarget === 'restart') {
+            inputConfig.restartButton = pressedIndex;
+            if (inputConfig.resetDroneButton === pressedIndex) inputConfig.resetDroneButton = null;
+            calibration.buttonTarget = 'resetDrone';
+            calibration.awaitButtonRelease = true;
+            calibration.message = 'RESTART BOUND TO BUTTON ' + (pressedIndex + 1) + '. RELEASE IT TO CONTINUE.';
+            syncTransmitterCalibrationDialog();
+          } else {
+            inputConfig.resetDroneButton = pressedIndex;
+            finishCalibration();
+          }
+        }
+      }
+    }
+    restartPadButtonWasDown = inputConfig.restartButton !== null && Boolean(buttonStates[inputConfig.restartButton]);
+    resetDronePadButtonWasDown = inputConfig.resetDroneButton !== null && Boolean(buttonStates[inputConfig.resetDroneButton]);
+    previousGamepadButtons = buttonStates;
+    return;
+  }
+
   let justBound = false;
   if (restartButtonCaptureUntil || resetDroneButtonCaptureUntil) {
     const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
@@ -8959,23 +9136,6 @@ function refreshInputSource() {
   document.querySelector('#statusText').textContent = flying ? `FLIGHT // ${source}` : 'READY';
 }
 
-function finishCalibration() {
-  if (!calibration) return;
-  const samples = 90;
-  calibration.centers.forEach((sum, index) => {
-    inputConfig.centers[index] = sum / samples;
-    const minimum = calibration.minimums[index];
-    const maximum = calibration.maximums[index];
-    if (Number.isFinite(minimum) && Number.isFinite(maximum) && maximum - minimum >= 0.25) {
-      inputConfig.axisRanges[index] = { min: minimum, max: maximum };
-    }
-  });
-  calibration = null;
-  document.querySelector('#transmitterCalibrationDialog').close();
-  saveInputSettings();
-  showToast('Transmitter calibration saved. Stick centers and full travel ranges are ready.');
-}
-
 function sampleGamepad() {
   const pads = readGamepadList();
   if (inputConfig.gamepadIndex === null && pads.length) {
@@ -8997,39 +9157,47 @@ function sampleGamepad() {
   gamepadInput = null;
   pollRestartGamepadButtons(pad);
   if (!pad) {
-    if (calibration) {
-      calibration = null;
-      document.querySelector('#transmitterCalibrationStatus').textContent = 'CONTROLLER DISCONNECTED. CANCEL AND RECONNECT TO START AGAIN.';
-      document.querySelector('#calibrationAction').disabled = true;
-    }
+    if (calibration) cancelTransmitterCalibration('Controller disconnected. Reconnect it and start setup again.');
     return;
   }
 
   if (calibration) {
     if (pad.index !== calibration.gamepadIndex) {
-      calibration = null;
-      document.querySelector('#transmitterCalibrationStatus').textContent = 'ACTIVE CONTROLLER CHANGED. CANCEL AND START CALIBRATION AGAIN.';
-      document.querySelector('#calibrationAction').disabled = true;
+      cancelTransmitterCalibration('The active controller changed. Start transmitter setup again.');
     } else if (calibration.stage === 'center') {
-      for (let index = 0; index < Math.min(pad.axes.length, calibration.centers.length); index += 1) {
-        calibration.centers[index] += pad.axes[index];
+      for (let index = 0; index < Math.min(pad.axes.length, calibration.centerSums.length); index += 1) {
+        calibration.centerSums[index] += Number(pad.axes[index]) || 0;
       }
       calibration.frames += 1;
       if (calibration.frames >= 90) {
-        calibration.stage = 'range';
-        calibration.frames = 0;
-        for (let index = 0; index < Math.min(pad.axes.length, calibration.minimums.length); index += 1) {
-          calibration.minimums[index] = pad.axes[index];
-          calibration.maximums[index] = pad.axes[index];
-        }
+        calibration.neutralCenters = calibration.centerSums.map((sum) => sum / calibration.frames);
+        calibration.roleIndex = 0;
+        startTransmitterAxisScan();
+      } else {
+        syncTransmitterCalibrationDialog();
       }
-      syncTransmitterCalibrationDialog();
-    } else {
+    } else if (calibration.stage === 'axis-scan') {
       for (let index = 0; index < Math.min(pad.axes.length, calibration.minimums.length); index += 1) {
-        calibration.minimums[index] = Math.min(calibration.minimums[index], pad.axes[index]);
-        calibration.maximums[index] = Math.max(calibration.maximums[index], pad.axes[index]);
+        const value = Number(pad.axes[index]) || 0;
+        calibration.minimums[index] = Math.min(calibration.minimums[index], value);
+        calibration.maximums[index] = Math.max(calibration.maximums[index], value);
       }
       calibration.frames += 1;
+      if (calibration.frames >= 180) {
+        const usedAxes = new Set(transmitterAxisRoles.slice(0, calibration.roleIndex)
+          .map((role) => Number(inputConfig.axes[role])));
+        let best = null;
+        for (let index = 0; index < calibration.minimums.length; index += 1) {
+          if (usedAxes.has(index)) continue;
+          const min = calibration.minimums[index];
+          const max = calibration.maximums[index];
+          const range = max - min;
+          if (!Number.isFinite(range) || range < 0.55) continue;
+          if (!best || range > best.range) best = { index, min, max, range };
+        }
+        calibration.axisCandidate = best;
+        calibration.stage = 'axis-result';
+      }
       syncTransmitterCalibrationDialog();
     }
   }
@@ -9045,8 +9213,7 @@ function sampleGamepad() {
   }
   const throttleAxis = Number(inputConfig.axes.throttle);
   const throttleRaw = Number(pad.axes[throttleAxis]) || 0;
-  const throttleAxisValue = normalizedGamepadAxis(throttleRaw, throttleAxis) * (inputConfig.invert.throttle ? -1 : 1);
-  live.throttle = 0.5 + 0.5 * throttleAxisValue;
+  live.throttle = normalizedThrottleAxis(throttleRaw, throttleAxis);
   gamepadInput = { ...centered, throttle: live.throttle, source: 'GAMEPAD / TRANSMITTER' };
 
   for (const role of ['yaw', 'pitch', 'roll']) {
@@ -9091,6 +9258,7 @@ function saveSettings() {
       quality,
       hudEnabled,
       reticleEnabled,
+      firstPersonPropsEnabled,
       gameChatEnabled,
       vignetteEnabled,
       raceLineEnabled,
@@ -9737,10 +9905,12 @@ function updateMenuPodiumLabels(lobby = partyLobby) {
   const podiumNames = [localPilotName, ...crew.map((member) => member.username || '')];
   menuPodiumLabels.forEach((podium, index) => {
     const label = String(podiumNames[index] || '').trim();
-    if (podium.label === label) return;
-    drawMenuPodiumLabel(podium.canvas, label);
-    podium.texture.needsUpdate = true;
-    podium.label = label;
+    if (podium.label !== label) {
+      drawMenuPodiumLabel(podium.canvas, label);
+      podium.texture.needsUpdate = true;
+      podium.label = label;
+    }
+    setRacePodiumUsername(menuStageRoot.children[index], label);
   });
 }
 
@@ -11267,7 +11437,8 @@ const cameraAngleQuat = new THREE.Quaternion();
 const axisX = new THREE.Vector3(1, 0, 0);
 const axisY = new THREE.Vector3(0, 1, 0);
 const axisZ = new THREE.Vector3(0, 0, 1);
-const camOffset = new THREE.Vector3(0, 0.08, 0);
+const flightCameraModelOffset = new THREE.Vector3(0, 0.08, 0.46);
+const flightCameraWorldOffset = new THREE.Vector3();
 const flightCameraForward = new THREE.Vector3();
 const flightCameraDesiredPosition = new THREE.Vector3();
 const flightCameraLookTarget = new THREE.Vector3();
@@ -11289,14 +11460,24 @@ function syncFlightDroneModelTransform() {
 function updateFlightCamera(dt = 1 / 60) {
   syncFlightDroneModelTransform();
   if (!thirdPersonFlightCamera) {
-    showDrone.visible = false;
+    if (firstPersonPropsEnabled) {
+      setFlightDroneMeshVisibility(true);
+      showDrone.visible = true;
+    } else {
+      setFlightDroneMeshVisibility(false);
+      showDrone.visible = false;
+    }
     cameraAngleQuat.setFromAxisAngle(axisX, THREE.MathUtils.degToRad(cameraAngle));
-    camera.position.copy(flight.position).add(camOffset.set(0, 0.08, 0).applyQuaternion(flight.orientation));
+    flightCameraWorldOffset.copy(flightCameraModelOffset)
+      .multiplyScalar(showDrone.scale.x)
+      .applyQuaternion(showDrone.quaternion);
+    camera.position.copy(flight.position).add(flightCameraWorldOffset);
     camera.quaternion.copy(flight.orientation).multiply(cameraAngleQuat);
     flightCameraNeedsSnap = true;
     return;
   }
 
+  setFlightDroneMeshVisibility(false);
   showDrone.visible = true;
   flightCameraForward.set(0, 0, -1).applyQuaternion(flight.orientation);
   flightCameraForward.y = 0;
@@ -11315,6 +11496,13 @@ function updateFlightCamera(dt = 1 / 60) {
     camera.position.lerp(flightCameraDesiredPosition, 1 - Math.exp(-dt * 5.5));
   }
   camera.lookAt(flightCameraLookTarget);
+}
+
+function setFlightDroneMeshVisibility(showPropsOnly) {
+  showDrone.traverse((node) => {
+    if (!node.isMesh) return;
+    node.visible = !showPropsOnly || node.userData.isDronePropColor === true;
+  });
 }
 
 function resetFlightControllerState() {
@@ -13235,6 +13423,7 @@ function exitFlight() {
   flightCameraPanel.hidden = true;
   flightCameraToggle.setAttribute('aria-expanded', 'false');
   orbit.enabled = currentPage === 'builder';
+  setFlightDroneMeshVisibility(false);
   showDrone.visible = currentPage !== 'builder';
   updatePartyDroneStage();
   fieldSpot.visible = currentPage !== 'builder';
@@ -13451,26 +13640,46 @@ function clearFlightRaceLine() {
   flightRaceLineRoot.visible = false;
 }
 
-function addFlightRaceLinePath(points, radius, color, opacity) {
-  if (points.length < 2) return;
-  const curve = points.length > 2
-    ? new THREE.CatmullRomCurve3(points, false, 'centripetal')
-    : new THREE.LineCurve3(points[0], points[1]);
+function createRoundedRaceLineTransition(start, end, outgoingDirection, incomingDirection) {
+  const offset = end.clone().sub(start);
+  const distance = offset.length();
+  if (distance < 0.05) return new THREE.LineCurve3(start, end);
+  const chordDirection = offset.normalize();
+  const outgoing = outgoingDirection.lengthSq() > 1e-6 ? outgoingDirection.clone().normalize() : chordDirection;
+  const incoming = incomingDirection.lengthSq() > 1e-6 ? incomingDirection.clone().normalize() : chordDirection;
+  const handleLength = Math.min(6, distance * 0.36);
+  return new THREE.CubicBezierCurve3(
+    start,
+    start.clone().addScaledVector(outgoing, handleLength),
+    end.clone().addScaledVector(incoming, -handleLength),
+    end,
+  );
+}
+
+function addFlightRaceLineCurve(curve, radius, color, opacity) {
   const length = curve.getLength();
   if (length < 0.05) return;
-  const geometry = new THREE.TubeGeometry(curve, THREE.MathUtils.clamp(Math.ceil(length / 1.35), 12, 960), radius, 7, false);
+  const geometry = new THREE.TubeGeometry(curve, THREE.MathUtils.clamp(Math.ceil(length / 1.35), 12, 960), radius, 5, false);
   const material = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
     opacity,
     depthWrite: false,
-    depthTest: false,
+    depthTest: true,
     toneMapped: false,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 12;
   mesh.userData.skipFlightCollision = true;
   flightRaceLineRoot.add(mesh);
+}
+
+function addFlightRaceLinePath(points, radius, color, opacity) {
+  if (points.length < 2) return;
+  const curve = points.length > 2
+    ? new THREE.CatmullRomCurve3(points, false, 'centripetal')
+    : new THREE.LineCurve3(points[0], points[1]);
+  addFlightRaceLineCurve(curve, radius, color, opacity);
 }
 
 function buildFlightRaceLineFromCourseEntries() {
@@ -13537,17 +13746,20 @@ function refreshFlightRaceLine() {
     const first = points[0];
     const rise = Math.max(1.5, Math.min(4, launch.distanceTo(first) * 0.06));
     const curvePoint = launch.clone().lerp(first, 0.38).add(new THREE.Vector3(0, rise, 0));
-    addFlightRaceLinePath([launch, curvePoint, first], 0.22, 0x39ffd0, 0.2);
+    addFlightRaceLinePath([launch, curvePoint, first], 0.055, 0x39ffd0, 0.24);
   }
-  for (let gateIndex = 0; gateIndex < points.length / 3; gateIndex += 1) {
+  const gateCount = points.length / 3;
+  for (let gateIndex = 0; gateIndex < gateCount; gateIndex += 1) {
     const pointIndex = gateIndex * 3;
-    addFlightRaceLinePath(points.slice(pointIndex, pointIndex + 3), 0.2, 0x39ffd0, 0.2);
-    addFlightRaceLinePath(points.slice(pointIndex + 2, pointIndex + 4), 0.2, 0x39ffd0, 0.2);
-    addFlightRaceLinePath(points.slice(pointIndex, pointIndex + 3), 0.075, 0xb5fff0, 0.68);
-    addFlightRaceLinePath(points.slice(pointIndex + 2, pointIndex + 4), 0.075, 0xb5fff0, 0.68);
+    addFlightRaceLinePath(points.slice(pointIndex, pointIndex + 3), 0.055, 0x39ffd0, 0.24);
+    const nextPointIndex = ((gateIndex + 1) % gateCount) * 3;
+    addFlightRaceLineCurve(createRoundedRaceLineTransition(
+      points[pointIndex + 2],
+      points[nextPointIndex],
+      points[pointIndex + 2].clone().sub(points[pointIndex + 1]),
+      points[nextPointIndex + 1].clone().sub(points[nextPointIndex]),
+    ), 0.045, 0x39ffd0, 0.2);
   }
-  addFlightRaceLinePath([points[points.length - 1], points[0]], 0.2, 0x39ffd0, 0.2);
-  addFlightRaceLinePath([points[points.length - 1], points[0]], 0.075, 0xb5fff0, 0.68);
   flightRaceLineRoot.visible = flying && raceLineEnabled
     && (selectedMode === 'Race' || isMultiplayerRaceActive() || builderTestCourse);
 }
@@ -13566,13 +13778,13 @@ function clearBuilderRaceLine() {
 
 function addBuilderRaceLineTube(curve, radius, color, opacity, segments) {
   if (curve.getLength() < 0.05) return;
-  const geometry = new THREE.TubeGeometry(curve, segments, radius, 7, false);
+  const geometry = new THREE.TubeGeometry(curve, segments, radius, 5, false);
   const material = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
     opacity,
     depthWrite: false,
-    depthTest: false,
+    depthTest: true,
     toneMapped: false,
   });
   const mesh = new THREE.Mesh(geometry, material);
@@ -13586,11 +13798,11 @@ function rebuildBuilderRaceLineHandles() {
   builderRaceLineHandles = builderRaceLinePoints.map((point, index) => {
     const isGateCenter = index % 3 === 1;
     const handle = new THREE.Mesh(
-      new THREE.SphereGeometry(0.48, 12, 10),
+      new THREE.SphereGeometry(0.34, 10, 8),
       new THREE.MeshBasicMaterial({
         color: isGateCenter ? 0x70ff9a : 0x73f6ff,
         transparent: true,
-        opacity: 0.78,
+        opacity: 0.58,
         depthWrite: false,
         depthTest: false,
         toneMapped: false,
@@ -13779,10 +13991,14 @@ function refreshBuilderRaceLineGeometry() {
   if (!builderRaceLineGenerated || builderRaceLinePoints.length < 3) return;
 
   const obstacles = builderRaceLineGatePlaneObstacles();
-  const addPath = (points, isMainRoute = false, skippedPlaneKey = null) => {
+  const addPath = (points, isMainRoute = false, skippedPlaneKey = null, transitionDirections = null) => {
     if (points.length < 2) return;
-    let curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
-    const nearbyObstacles = points.length > 2 ? builderRaceLineNearbyPlanes(points, obstacles) : [];
+    let curve = points.length > 2
+      ? new THREE.CatmullRomCurve3(points, false, 'centripetal')
+      : transitionDirections
+        ? createRoundedRaceLineTransition(points[0], points[1], transitionDirections.outgoing, transitionDirections.incoming)
+        : new THREE.LineCurve3(points[0], points[1]);
+    const nearbyObstacles = builderRaceLineNearbyPlanes([...points, ...curve.getPoints(16)], obstacles);
     const skippedPlane = nearbyObstacles.find((obstacle) => obstacle.key === skippedPlaneKey);
     const planeCrossingIsValid = !skippedPlane || builderRaceLineCurveCrossesPlaneCorrectly(curve, skippedPlane);
     if (!planeCrossingIsValid || !builderRaceLineCurveIsClear(curve, nearbyObstacles, skippedPlaneKey)) {
@@ -13793,8 +14009,7 @@ function refreshBuilderRaceLineGeometry() {
       curve = linearPath;
     }
     const segments = THREE.MathUtils.clamp(Math.ceil(curve.getLength() / 1.35), 24, 960);
-    addBuilderRaceLineTube(curve, isMainRoute ? 0.38 : 0.3, 0x39ffd0, 0.18, segments);
-    addBuilderRaceLineTube(curve, isMainRoute ? 0.13 : 0.1, 0xb5fff0, 0.66, segments);
+    addBuilderRaceLineTube(curve, isMainRoute ? 0.075 : 0.06, 0x39ffd0, isMainRoute ? 0.28 : 0.22, segments);
   };
 
   const firstApproach = builderRaceLinePoints[0];
@@ -13828,7 +14043,10 @@ function refreshBuilderRaceLineGeometry() {
     addPath(routeBuilderRaceLineAroundPlanes([
       builderRaceLinePoints[pointIndex + 2],
       builderRaceLinePoints[pointIndex + 3],
-    ], obstacles), true);
+    ], obstacles), true, null, {
+      outgoing: builderRaceLinePoints[pointIndex + 2].clone().sub(builderRaceLinePoints[pointIndex + 1]),
+      incoming: builderRaceLinePoints[pointIndex + 4].clone().sub(builderRaceLinePoints[pointIndex + 3]),
+    });
   }
   builderRaceLineHandles.forEach((handle, index) => handle.position.copy(builderRaceLinePoints[index]));
 }
@@ -15570,6 +15788,7 @@ setSwitch(soundToggle, soundEnabled);
 setSwitch(document.querySelector('#lobbyMusicToggle'), lobbyMusicEnabled);
 setSwitch(document.querySelector('#hudToggle'), hudEnabled);
 setSwitch(document.querySelector('#reticleToggle'), reticleEnabled);
+setSwitch(document.querySelector('#firstPersonPropsToggle'), firstPersonPropsEnabled);
 setSwitch(document.querySelector('#gameChatToggle'), gameChatEnabled);
 setSwitch(document.querySelector('#vignetteToggle'), vignetteEnabled);
 setSwitch(document.querySelector('#raceLineToggle'), raceLineEnabled);
@@ -15631,6 +15850,12 @@ document.querySelector('#reticleToggle').addEventListener('click', (event) => {
   hud.classList.toggle('reticle-hidden', !reticleEnabled);
   saveSettings();
 });
+document.querySelector('#firstPersonPropsToggle').addEventListener('click', (event) => {
+  firstPersonPropsEnabled = !firstPersonPropsEnabled;
+  setSwitch(event.currentTarget, firstPersonPropsEnabled);
+  if (flying) updateFlightCamera();
+  saveSettings();
+});
 document.querySelector('#gameChatToggle').addEventListener('click', (event) => {
   gameChatEnabled = !gameChatEnabled;
   setSwitch(event.currentTarget, gameChatEnabled);
@@ -15671,6 +15896,7 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   quality = 1.8;
   hudEnabled = true;
   reticleEnabled = true;
+  firstPersonPropsEnabled = true;
   gameChatEnabled = true;
   vignetteEnabled = true;
   raceLineEnabled = true;
@@ -15678,9 +15904,11 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   renderRatePreview();
   setSwitch(document.querySelector('#hudToggle'), true);
   setSwitch(document.querySelector('#reticleToggle'), true);
+  setSwitch(document.querySelector('#firstPersonPropsToggle'), true);
   setSwitch(document.querySelector('#gameChatToggle'), true);
   setSwitch(document.querySelector('#vignetteToggle'), true);
   setSwitch(document.querySelector('#raceLineToggle'), true);
+  if (flying) updateFlightCamera();
   hud.classList.remove('is-hidden', 'reticle-hidden', 'no-vignette');
   updateGameChatUI();
   updateRenderResolution();

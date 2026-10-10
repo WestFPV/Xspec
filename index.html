@@ -496,12 +496,12 @@
                   <label class="device-select-label" for="gamepadSelect">ACTIVE CONTROLLER</label>
                   <div class="device-select-row"><select id="gamepadSelect" aria-label="Select active controller"><option value="">No controller detected</option></select><button id="scanGamepads" class="small-outline-button" type="button">RESCAN</button></div>
                   <div class="device-detail" id="gamepadDetail">Connect a controller, then move a stick or press a button.</div>
-                  <div class="transmitter-calibration"><span>Keep both sticks centered during calibration.</span><button id="calibrateSticks" class="small-outline-button" type="button">CALIBRATE TRANSMITTER</button></div>
+                  <div class="transmitter-calibration"><span>Guided axis mapping and button setup for your transmitter.</span><button id="calibrateSticks" class="small-outline-button" type="button">SET UP TRANSMITTER</button></div>
                   <dialog id="transmitterCalibrationDialog" class="transmitter-calibration-dialog" aria-labelledby="transmitterCalibrationTitle">
-                    <div class="calibration-dialog-kicker">CONTROLLER SETUP / <span id="transmitterCalibrationStep">STEP 1 OF 2</span></div>
-                    <h3 id="transmitterCalibrationTitle">Calibrate transmitter</h3>
-                    <p id="transmitterCalibrationInstructions">Hold the sticks centered and throttle at its minimum. Keep every control still while the center position is sampled.</p>
-                    <progress id="transmitterCalibrationProgress" max="180" value="0" aria-label="Calibration progress"></progress>
+                    <div class="calibration-dialog-kicker">CONTROLLER SETUP / <span id="transmitterCalibrationStep">STEP 1 OF 7</span></div>
+                    <h3 id="transmitterCalibrationTitle">Set up transmitter</h3>
+                    <p id="transmitterCalibrationInstructions">Keep yaw, pitch, and roll centered. Hold throttle at its minimum while the controller is sampled.</p>
+                    <progress id="transmitterCalibrationProgress" max="90" value="0" aria-label="Calibration progress"></progress>
                     <div class="calibration-dialog-status" id="transmitterCalibrationStatus" role="status">SAMPLING CENTER…</div>
                     <div class="calibration-dialog-actions">
                       <button id="calibrationCancel" class="small-outline-button" type="button">CANCEL</button>
@@ -517,10 +517,6 @@
                       <label class="axis-row" for="mapThrottle"><span class="axis-name"><b>02</b> THROTTLE</span><select id="mapThrottle" data-axis-map="throttle"><option value="0">Axis 1 · Left X</option><option value="1" selected>Axis 2 · Left Y</option><option value="2">Axis 3 · Right X</option><option value="3">Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="throttle" aria-label="Reverse throttle axis" checked /><span class="axis-meter"><i data-axis-meter="throttle"></i></span></label>
                       <label class="axis-row" for="mapRoll"><span class="axis-name"><b>03</b> ROLL</span><select id="mapRoll" data-axis-map="roll"><option value="0">Axis 1 · Left X</option><option value="1">Axis 2 · Left Y</option><option value="2" selected>Axis 3 · Right X</option><option value="3">Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="roll" aria-label="Reverse roll axis" checked /><span class="axis-meter"><i data-axis-meter="roll"></i></span></label>
                       <label class="axis-row" for="mapPitch"><span class="axis-name"><b>04</b> PITCH</span><select id="mapPitch" data-axis-map="pitch"><option value="0">Axis 1 · Left X</option><option value="1">Axis 2 · Left Y</option><option value="2">Axis 3 · Right X</option><option value="3" selected>Axis 4 · Right Y</option></select><input class="axis-invert" type="checkbox" data-axis-invert="pitch" aria-label="Reverse pitch axis" checked /><span class="axis-meter"><i data-axis-meter="pitch"></i></span></label>
-                    </div>
-                    <div class="input-tuning">
-                      <label for="deadzoneRange"><span>STICK DEAD ZONE</span><input id="deadzoneRange" type="range" min="0" max="0.2" step="0.01" value="0.06" /><output id="deadzoneValue">6%</output></label>
-                      <div class="keyboard-note"><span class="tiny-pip"></span> KEYBOARD BACKUP <small>W/S pitch · A/D roll · Q/E yaw · Space/C throttle</small></div>
                     </div>
                   </div>
                 </article>
@@ -568,6 +564,7 @@
               <div class="settings-list">
                 <label class="setting-row" for="fovRange"><span><strong>Camera field of view</strong><small>Wider view, more speed</small></span><input id="fovRange" type="range" min="85" max="130" value="90" /><output id="fovValue">90°</output></label>
                 <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="60" value="45" /><output id="angleValue">45°</output></label>
+                <div class="setting-row"><span><strong>First-person propellers</strong><small>Show the spinning props at the edge of the FPV view</small></span><button id="firstPersonPropsToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
                 <label class="setting-row" for="qualitySelect"><span><strong>Render quality</strong><small>Adjust resolution for your display</small></span><select id="qualitySelect"><option value="1">Performance</option><option value="1.35">Balanced</option><option value="1.8" selected>High</option><option value="2.1">Super</option></select></label>
                 <label class="setting-row" for="droneNeonColor"><span><strong>Drone LED color</strong><small>Glow color for the arms and LEDs</small></span><input id="droneNeonColor" type="color" value="#52e8ff" /><output id="droneNeonColorValue">#52E8FF</output></label>
                 <label class="setting-row" for="droneBodyColor"><span><strong>Drone center body</strong><small>Change the blue body panels; windshield stays black</small></span><input id="droneBodyColor" type="color" value="#45dfff" /><output id="droneBodyColorValue">#45DFFF</output></label>
