@@ -5080,19 +5080,24 @@ function getEnvironmentDaylight() {
 function updateWorldLightBalance(day = getEnvironmentDaylight()) {
   const menuScene = !flying && currentPage !== 'builder';
   const brightness = environmentState.brightness;
+  const communityTrackFlight = flying && currentPage !== 'builder' && isCommunityTrack(activeTrack);
+  const flightVisibilityBoost = communityTrackFlight ? 1.6 : 1;
+  const worldBrightness = brightness * flightVisibilityBoost;
   const profile = environmentLightProfiles[activeBiome] || environmentLightProfiles['neon-docks'];
   hemi.intensity = menuScene
     ? (0.62 + day * 0.45) * brightness * 0.37
-    : (profile.ambient + day * 0.14) * brightness;
+    : (profile.ambient + day * 0.14) * worldBrightness;
   moon.intensity = menuScene
     ? (0.92 + day * 0.4) * brightness * 0.34
-    : (profile.moonIntensity + day * 0.12) * brightness;
+    : (profile.moonIntensity + day * 0.12) * worldBrightness;
   fill.intensity = menuScene
     ? (0.32 + day * 0.25) * brightness * 0.34
-    : (profile.fillIntensity + day * 0.05) * brightness;
+    : (profile.fillIntensity + day * 0.05) * worldBrightness;
   scene.environmentIntensity = menuScene
     ? (0.12 + day * 0.02) * brightness * 0.55
-    : profile.environment * brightness;
+    : profile.environment * worldBrightness;
+  const platformGrass = menuBackdropRoot.getObjectByName('Continuous textured grass on the sky platform');
+  if (platformGrass?.material) platformGrass.material.emissiveIntensity = 0.22 * flightVisibilityBoost;
 }
 
 function applyEnvironmentToScene() {
@@ -7907,7 +7912,7 @@ let authSessionReady = false;
 let authEmailAddress = '';
 let authSetupToken = '';
 const storedSettings = readStored('aerframe-settings', {});
-const flightTuneDefaults = {
+const flightTuneDefaults = Object.freeze({
   rollP: 12,
   rollI: 1.2,
   rollD: 0.02,
@@ -7924,30 +7929,8 @@ const flightTuneDefaults = {
   motorResponse: 80,
   airDrag: 0.34,
   propwash: 100,
-};
-const flightTuneRanges = {
-  rollP: [0, 40],
-  rollI: [0, 5],
-  rollD: [0, 0.1],
-  pitchP: [0, 40],
-  pitchI: [0, 5],
-  pitchD: [0, 0.1],
-  yawP: [0, 40],
-  yawI: [0, 5],
-  yawD: [0, 0.1],
-  weight: [300, 2000],
-  wheelbase: [100, 500],
-  motorThrust: [200, 2000],
-  propDiameter: [2, 10],
-  motorResponse: [10, 250],
-  airDrag: [0, 2],
-  propwash: [0, 200],
-};
-const flightTune = Object.fromEntries(Object.entries(flightTuneDefaults).map(([name, fallback]) => {
-  const value = Number(storedSettings.flightTune?.[name]);
-  const [min, max] = flightTuneRanges[name];
-  return [name, Number.isFinite(value) ? THREE.MathUtils.clamp(value, min, max) : fallback];
-}));
+});
+const flightTune = flightTuneDefaults;
 let currentPage = 'singleplayer';
 let pageBeforeSettings = 'singleplayer';
 let selectedMode = 'Race';
@@ -8603,37 +8586,19 @@ function syncFlightTuneControls() {
     const field = input.dataset.flightTune;
     const value = flightTune[field];
     input.value = String(value);
+    input.readOnly = true;
+    input.setAttribute('aria-readonly', 'true');
   });
   document.querySelectorAll('[data-flight-pid]').forEach((input) => {
     input.value = String(flightTune[input.dataset.flightPid]);
+    input.readOnly = true;
+    input.setAttribute('aria-readonly', 'true');
   });
+  const resetButton = document.querySelector('#resetFlightTune');
+  resetButton.disabled = true;
+  resetButton.title = 'The standard flight tune is locked for every pilot.';
 }
 syncFlightTuneControls();
-document.querySelectorAll('[data-flight-tune]').forEach((input) => input.addEventListener('change', () => {
-  const field = input.dataset.flightTune;
-  const [min, max] = flightTuneRanges[field];
-  const value = input.valueAsNumber;
-  if (!Number.isFinite(value)) return;
-  flightTune[field] = THREE.MathUtils.clamp(value, min, max);
-  input.value = String(flightTune[field]);
-  saveSettings();
-}));
-document.querySelectorAll('[data-flight-pid]').forEach((input) => input.addEventListener('change', () => {
-  const field = input.dataset.flightPid;
-  const [min, max] = flightTuneRanges[field];
-  const value = input.valueAsNumber;
-  if (!Number.isFinite(value)) return;
-  flightTune[field] = THREE.MathUtils.clamp(value, min, max);
-  input.value = String(flightTune[field]);
-  saveSettings();
-}));
-document.querySelector('#resetFlightTune').addEventListener('click', () => {
-  Object.assign(flightTune, flightTuneDefaults);
-  syncFlightTuneControls();
-  renderRatePreview();
-  saveSettings();
-  showToast('Flight tune reset to defaults.');
-});
 window.addEventListener('resize', renderRatePreview);
 if ('ResizeObserver' in window) {
   new ResizeObserver(renderRatePreview).observe(document.querySelector('#ratePreviewCanvas'));
@@ -8780,7 +8745,13 @@ function sampleGamepad() {
     refreshGamepadList(true);
     saveInputSettings();
   }
-  const pad = pads.find((candidate) => candidate.index === inputConfig.gamepadIndex) || null;
+  let pad = pads.find((candidate) => candidate.index === inputConfig.gamepadIndex) || null;
+  if (!pad && pads.length) {
+    pad = pads[0];
+    inputConfig.gamepadIndex = pad.index;
+    refreshGamepadList();
+    saveInputSettings();
+  }
   if ((pad?.index ?? null) !== (lastGamepad?.index ?? null)) {
     refreshGamepadList();
   }
@@ -8890,7 +8861,6 @@ function saveSettings() {
       soundEnabled,
       lobbyMusicEnabled,
       audioVolume,
-      flightTune,
     }));
   } catch { /* Private browsing can disable local storage. */ }
 }
@@ -12293,6 +12263,7 @@ async function enterFlight() {
   updateRaceTimerDisplay();
   keys.clear();
   window.focus();
+  refreshGamepadList();
 }
 
 function exitFlight() {
@@ -14654,7 +14625,6 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   reticleEnabled = true;
   gameChatEnabled = true;
   vignetteEnabled = true;
-  Object.assign(flightTune, flightTuneDefaults);
   syncFlightTuneControls();
   renderRatePreview();
   setSwitch(document.querySelector('#hudToggle'), true);

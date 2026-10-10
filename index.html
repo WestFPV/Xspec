@@ -539,8 +539,8 @@
             </section>
             <section id="settingsTunePanel" class="settings-subpanel flight-tune-panel" role="tabpanel" aria-labelledby="settingsTuneTab" data-settings-content="tune" hidden>
               <header class="flight-tune-heading">
-                <div><span class="panel-overline">RATE PID / VEHICLE SETUP</span><h3>Flight tune</h3><p>Adjust the simulated rate controller and airframe. PID gains are simulator values, not Betaflight CLI values; vehicle values change mass, thrust, and rotational authority.</p></div>
-                <span class="flight-tune-status"><i></i> SAVED LOCALLY</span>
+                <div><span class="panel-overline">RATE PID / VEHICLE SETUP</span><h3>Flight tune</h3><p>The PID and airframe tune is fixed to this build's standard values for all pilots in Solo and multiplayer, on every track.</p></div>
+                <span class="flight-tune-status"><i></i> STANDARD TUNE / LOCKED</span>
               </header>
               <section class="flight-pid-setup" aria-labelledby="flightPidTitle">
                 <div class="flight-tune-section-heading"><div><span class="panel-overline">ANGULAR RATE CONTROLLER</span><h4 id="flightPidTitle">PID gains</h4></div><small>P responds to rate error / I holds rate / D damps rate changes</small></div>
@@ -562,7 +562,7 @@
                   <label class="setting-row" for="tunePropwash"><span><strong>Prop-wash strength</strong><small>Rate turbulence during hard descents</small></span><input id="tunePropwash" data-flight-tune="propwash" type="number" min="0" max="200" step="5" /><output>%</output></label>
                 </div>
               </section>
-              <div class="settings-bottom flight-tune-bottom"><span><span class="tiny-pip"></span> SAVED ON THIS DEVICE</span><button id="resetFlightTune" class="text-button" type="button">RESET FLIGHT TUNE</button></div>
+              <div class="settings-bottom flight-tune-bottom"><span><span class="tiny-pip"></span> SHARED PID / AIRFRAME TUNE</span><button id="resetFlightTune" class="text-button" type="button" disabled>STANDARD TUNE LOCKED</button></div>
             </section>
             <section id="settingsCameraPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsCameraTab" data-settings-content="camera" hidden>
               <div class="settings-list">
