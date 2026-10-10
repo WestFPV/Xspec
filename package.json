@@ -12,6 +12,7 @@
     "cf:deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
+    "flag-icons": "^7.5.0",
     "three": "^0.180.0"
   },
   "devDependencies": {

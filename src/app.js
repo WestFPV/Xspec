@@ -10,6 +10,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Octree } from 'three/addons/math/Octree.js';
 import { standardRaceTracks } from '../race-courses.js';
 import { usernameError } from '../username-policy.js';
+import flagCountryCatalog from 'flag-icons/country.json';
 
 const root = document.querySelector('.app-shell');
 const mount = document.querySelector('#world');
@@ -347,6 +348,8 @@ sharedMaterials.neonDocksMountain = new THREE.MeshStandardMaterial({ color: 0xff
 const DEFAULT_DRONE_NEON_COLOR = '#52e8ff';
 const DEFAULT_DRONE_BODY_COLOR = '#45dfff';
 const DEFAULT_DRONE_PROP_COLOR = '#45dfff';
+const droneCountryCatalog = flagCountryCatalog.filter((country) => country.iso && /^[a-z]{2}$/.test(country.code));
+const droneCountryByCode = new Map(droneCountryCatalog.map((country) => [country.code, country]));
 function readSavedDroneColor(key, fallback) {
   try {
     const value = JSON.parse(localStorage.getItem('aerframe-settings') || '{}')[key];
@@ -355,6 +358,69 @@ function readSavedDroneColor(key, fallback) {
     return fallback;
   }
 }
+function readSavedDroneSkin() {
+  try {
+    const savedSkin = JSON.parse(localStorage.getItem('aerframe-settings') || '{}').droneSkin;
+    if (savedSkin === 'usa-flag') return 'country:us';
+    const countryCode = /^country:([a-z]{2})$/.exec(savedSkin || '')?.[1];
+    return countryCode && droneCountryByCode.has(countryCode) ? `country:${countryCode}` : 'standard';
+  } catch {
+    return 'standard';
+  }
+}
+function readSavedDroneCountryCode() {
+  try {
+    const settings = JSON.parse(localStorage.getItem('aerframe-settings') || '{}');
+    if (droneCountryByCode.has(settings.droneCountryFlagCode)) return settings.droneCountryFlagCode;
+    const skinCode = /^country:([a-z]{2})$/.exec(settings.droneSkin || '')?.[1];
+    return skinCode && droneCountryByCode.has(skinCode) ? skinCode : 'us';
+  } catch {
+    return 'us';
+  }
+}
+let droneSkinId = readSavedDroneSkin();
+let droneCountryFlagCode = readSavedDroneCountryCode();
+let droneCountryFlagTexture = null;
+let droneCountryFlagLoadId = 0;
+const droneUsaFlagCanvas = document.createElement('canvas');
+droneUsaFlagCanvas.width = 1024;
+droneUsaFlagCanvas.height = 540;
+const droneUsaFlagContext = droneUsaFlagCanvas.getContext('2d');
+droneUsaFlagContext.fillStyle = '#b22234';
+droneUsaFlagContext.fillRect(0, 0, 1024, 540);
+for (let stripe = 1; stripe < 13; stripe += 2) {
+  droneUsaFlagContext.fillStyle = '#ffffff';
+  droneUsaFlagContext.fillRect(0, stripe * (540 / 13), 1024, 540 / 13);
+}
+droneUsaFlagContext.fillStyle = '#3c3b6e';
+droneUsaFlagContext.fillRect(0, 0, 410, 291);
+droneUsaFlagContext.fillStyle = '#ffffff';
+for (let row = 0; row < 9; row += 1) {
+  const starCount = row % 2 === 0 ? 6 : 5;
+  const starY = (row + 0.5) * (291 / 9);
+  for (let column = 0; column < starCount; column += 1) {
+    const starX = ((column + 0.5) / starCount) * 410;
+    const outerRadius = 10;
+    const innerRadius = 4.2;
+    droneUsaFlagContext.beginPath();
+    for (let point = 0; point < 10; point += 1) {
+      const angle = -Math.PI / 2 + point * Math.PI / 5;
+      const radius = point % 2 === 0 ? outerRadius : innerRadius;
+      const x = starX + Math.cos(angle) * radius;
+      const y = starY + Math.sin(angle) * radius;
+      if (point === 0) droneUsaFlagContext.moveTo(x, y);
+      else droneUsaFlagContext.lineTo(x, y);
+    }
+    droneUsaFlagContext.closePath();
+    droneUsaFlagContext.fill();
+  }
+}
+const droneUsaFlagTexture = new THREE.CanvasTexture(droneUsaFlagCanvas);
+droneUsaFlagTexture.colorSpace = THREE.SRGBColorSpace;
+droneUsaFlagTexture.wrapS = THREE.ClampToEdgeWrapping;
+droneUsaFlagTexture.wrapT = THREE.ClampToEdgeWrapping;
+droneUsaFlagTexture.needsUpdate = true;
+droneCountryFlagTexture = droneUsaFlagTexture;
 let droneNeonColor = (() => {
   return readSavedDroneColor('droneNeonColor', DEFAULT_DRONE_NEON_COLOR);
 })();
@@ -370,6 +436,36 @@ const droneArmGlowMaterial = new THREE.MeshStandardMaterial({
 });
 const droneBodyColorMaterial = new THREE.MeshStandardMaterial({ color: droneBodyColor, roughness: 0.35, metalness: 0.12 });
 const droneBodyPaintMaterial = new THREE.MeshStandardMaterial({ color: droneBodyColor, roughness: 0.35, metalness: 0.12, vertexColors: true });
+const droneUsaBodySkinMaterial = new THREE.MeshStandardMaterial({ color: droneBodyColor, roughness: 0.55, metalness: 0.04, side: THREE.DoubleSide, vertexColors: true });
+droneUsaBodySkinMaterial.onBeforeCompile = (shader) => {
+  const flagUniform = { value: droneCountryFlagTexture || droneUsaFlagTexture };
+  shader.uniforms.droneUsaFlagMap = flagUniform;
+  droneUsaBodySkinMaterial.userData.droneFlagUniform = flagUniform;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec2 droneSkinUv;\nattribute float droneSkinTopMask;\nvarying vec2 vDroneSkinUv;\nvarying float vDroneSkinTopMask;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDroneSkinUv = droneSkinUv;\nvDroneSkinTopMask = droneSkinTopMask;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform sampler2D droneUsaFlagMap;\nvarying vec2 vDroneSkinUv;\nvarying float vDroneSkinTopMask;')
+    .replace('#include <map_fragment>', '#include <map_fragment>\nvec4 droneUsaFlagColor = texture2D(droneUsaFlagMap, vDroneSkinUv);\ndiffuseColor.rgb = mix(diffuseColor.rgb, droneUsaFlagColor.rgb, vDroneSkinTopMask);');
+};
+droneUsaBodySkinMaterial.customProgramCacheKey = () => 'drone-usa-top-flag-v1';
+async function loadDroneCountryFlagTexture(countryCode) {
+  const country = droneCountryByCode.get(countryCode);
+  if (!country) return;
+  const loadId = ++droneCountryFlagLoadId;
+  const flagUrl = new URL(`flags/4x3/${countryCode}.svg`, document.baseURI).href;
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = flagUrl;
+  await image.decode();
+  if (loadId !== droneCountryFlagLoadId) return;
+  droneUsaFlagContext.clearRect(0, 0, droneUsaFlagCanvas.width, droneUsaFlagCanvas.height);
+  droneUsaFlagContext.drawImage(image, 0, 0, droneUsaFlagCanvas.width, droneUsaFlagCanvas.height);
+  droneUsaFlagTexture.needsUpdate = true;
+  droneCountryFlagTexture = droneUsaFlagTexture;
+  const flagUniform = droneUsaBodySkinMaterial.userData.droneFlagUniform;
+  if (flagUniform) flagUniform.value = droneUsaFlagTexture;
+}
 const dronePropColorMaterial = new THREE.MeshStandardMaterial({
   color: dronePropColor,
   roughness: 0.42,
@@ -472,6 +568,7 @@ const flightDamageState = {
 const flightArmDamageMeshes = [];
 const flightDebris = [];
 const flightDamageParticles = [];
+let destroyedFlightWasGrounded = false;
 let flightSmokeTexture = null;
 let flightFireTexture = null;
 let builderRaceLineGenerated = false;
@@ -5498,9 +5595,10 @@ function refreshFlightGroundSupportOffsets() {
   if (supportOffsets.length) flightDroneGroundSupportOffsets = supportOffsets;
 }
 
-function flightGroundContactOffset(orientation = flight.orientation) {
+function flightGroundContactOffset(orientation = flight.orientation, travelVelocity = null) {
   flightDroneInverseOrientation.copy(orientation).invert();
   flightGroundUpLocal.copy(axisY).applyQuaternion(flightDroneInverseOrientation);
+  const hasTravelDirection = travelVelocity && Math.hypot(travelVelocity.x, travelVelocity.z) > 0.5;
   let lowestY = Infinity;
   for (const supportOffset of flightDroneGroundSupportOffsets) {
     const projectedY = supportOffset.x * showDrone.scale.x * flightGroundUpLocal.x
@@ -5510,19 +5608,30 @@ function flightGroundContactOffset(orientation = flight.orientation) {
   }
   flightGroundContactPoint.set(0, 0, 0);
   let contactCount = 0;
+  let leadingContactScore = -Infinity;
   for (const supportOffset of flightDroneGroundSupportOffsets) {
     const projectedY = supportOffset.x * showDrone.scale.x * flightGroundUpLocal.x
       + supportOffset.y * showDrone.scale.y * flightGroundUpLocal.y
       + supportOffset.z * showDrone.scale.z * flightGroundUpLocal.z;
     if (projectedY > lowestY + 0.015) continue;
-    flightGroundContactPoint.add(flightGroundSupportOffset.set(
+    flightGroundSupportOffset.set(
       supportOffset.x * showDrone.scale.x,
       supportOffset.y * showDrone.scale.y,
       supportOffset.z * showDrone.scale.z,
-    ).applyQuaternion(orientation));
-    contactCount += 1;
+    ).applyQuaternion(orientation);
+    if (hasTravelDirection) {
+      const leadingScore = flightGroundSupportOffset.x * travelVelocity.x
+        + flightGroundSupportOffset.z * travelVelocity.z;
+      if (leadingScore > leadingContactScore) {
+        leadingContactScore = leadingScore;
+        flightGroundContactPoint.copy(flightGroundSupportOffset);
+      }
+    } else {
+      flightGroundContactPoint.add(flightGroundSupportOffset);
+      contactCount += 1;
+    }
   }
-  if (contactCount) flightGroundContactPoint.multiplyScalar(1 / contactCount);
+  if (!hasTravelDirection && contactCount) flightGroundContactPoint.multiplyScalar(1 / contactCount);
   return flightGroundContactPoint;
 }
 
@@ -8000,6 +8109,7 @@ function showTrackPickerSkyPlatformLabel() {
 
 // The hangar drone stays empty until the uploaded GLB parts have loaded.
 const showDrone = new THREE.Group();
+const flightCameraModelOffset = new THREE.Vector3(0, 0.08, 0.46);
 showDrone.position.set(1.7, 8.2, -1.5);
 showDrone.rotation.y = 0.4;
 showDrone.scale.setScalar(1.45);
@@ -8075,6 +8185,8 @@ function applyDroneNeonColor(color) {
 function applyDroneBodyColor(color) {
   droneBodyColorMaterial.color.set(color);
   droneBodyPaintMaterial.color.set(color);
+  droneUsaBodySkinMaterial.color.set(color);
+  if (droneSkinId.startsWith('country:')) return;
   displayedDroneBodyMeshes.forEach((mesh) => {
     const slots = mesh.userData.droneBodyColorMaterialSlots;
     if (mesh.userData.isDronePaintedBody) mesh.material = droneBodyPaintMaterial;
@@ -8086,6 +8198,32 @@ function applyDroneBodyColor(color) {
 function applyDronePropColor(color) {
   dronePropColorMaterial.color.set(color);
   displayedDronePropMeshes.forEach((mesh) => { mesh.material = dronePropColorMaterial; });
+}
+
+function applyDroneSkin(skinId, selectedCountryCode = droneCountryFlagCode) {
+  const requestedCountryCode = skinId === 'usa-flag'
+    ? 'us'
+    : skinId === 'country-flag'
+      ? selectedCountryCode
+      : /^country:([a-z]{2})$/.exec(skinId || '')?.[1];
+  const countryCode = requestedCountryCode && droneCountryByCode.has(requestedCountryCode) ? requestedCountryCode : null;
+  droneSkinId = countryCode ? `country:${countryCode}` : 'standard';
+  if (countryCode) {
+    droneCountryFlagCode = countryCode;
+    void loadDroneCountryFlagTexture(countryCode).catch((error) => console.error('The country flag skin could not be loaded.', error));
+  } else {
+    droneCountryFlagLoadId += 1;
+  }
+  displayedDroneBodyMeshes.forEach((mesh) => {
+    if (countryCode) {
+      mesh.material = droneUsaBodySkinMaterial;
+      return;
+    }
+    const slots = mesh.userData.droneBodyColorMaterialSlots;
+    if (mesh.userData.isDronePaintedBody) mesh.material = droneBodyPaintMaterial;
+    else if (Array.isArray(mesh.material) && slots) slots.forEach((slot) => { mesh.material[slot] = droneBodyColorMaterial; });
+    else mesh.material = droneBodyColorMaterial;
+  });
 }
 
 function registerFlightArmDamageMesh(mesh) {
@@ -8425,6 +8563,7 @@ async function loadDroneShowcaseModel() {
       return motor;
     };
     const bodyCenter = bodyBounds.getCenter(new THREE.Vector3());
+    const bodyDimensions = bodyBounds.getSize(new THREE.Vector3());
     const bodyCameraPoint = bodyCenter.clone();
     bodyCameraPoint.y -= 0.4;
     bodyCameraPoint.z = bodyBounds.max.z + 0.45;
@@ -8438,6 +8577,8 @@ async function loadDroneShowcaseModel() {
       node.geometry = paintedGeometry;
       const positions = paintedGeometry.attributes.position;
       const colors = new Float32Array(positions.count * 3);
+      const droneSkinUvs = new Float32Array(positions.count * 2);
+      const droneSkinTopMask = new Float32Array(positions.count);
       colors.fill(1);
       node.updateWorldMatrix(true, false);
       const firstVertex = new THREE.Vector3();
@@ -8454,15 +8595,27 @@ async function loadDroneShowcaseModel() {
         secondEdge.subVectors(thirdVertex, firstVertex);
         faceNormal.crossVectors(firstEdge, secondEdge).normalize();
         const centerZ = (firstVertex.z + secondVertex.z + thirdVertex.z) / 3;
-        if (faceNormal.z <= 0.2 || centerZ <= bodyCenter.z + 1.8) continue;
+        const isWindshieldFace = faceNormal.z > 0.2 && centerZ > bodyCenter.z + 1.8;
+        const faceHasTopFlag = faceNormal.y > 0.24;
         for (let corner = 0; corner < 3; corner += 1) {
           const colorOffset = (vertex + corner) * 3;
-          colors[colorOffset] = 0.005;
-          colors[colorOffset + 1] = 0.005;
-          colors[colorOffset + 2] = 0.005;
+          const vertexIndex = vertex + corner;
+          const skinUvOffset = vertexIndex * 2;
+          const point = corner === 0 ? firstVertex : corner === 1 ? secondVertex : thirdVertex;
+          droneSkinUvs[skinUvOffset] = THREE.MathUtils.clamp((point.z - bodyBounds.min.z) / bodyDimensions.z, 0, 1);
+          droneSkinUvs[skinUvOffset + 1] = 1 - THREE.MathUtils.clamp((point.x - bodyBounds.min.x) / bodyDimensions.x, 0, 1);
+          if (isWindshieldFace) {
+            colors[colorOffset] = 0.005;
+            colors[colorOffset + 1] = 0.005;
+            colors[colorOffset + 2] = 0.005;
+          } else if (faceHasTopFlag) {
+            droneSkinTopMask[vertexIndex] = 1;
+          }
         }
       }
       paintedGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      paintedGeometry.setAttribute('droneSkinUv', new THREE.BufferAttribute(droneSkinUvs, 2));
+      paintedGeometry.setAttribute('droneSkinTopMask', new THREE.BufferAttribute(droneSkinTopMask, 1));
       node.material = droneBodyPaintMaterial;
       node.userData.isDronePaintedBody = true;
     });
@@ -8614,6 +8767,7 @@ async function loadDroneShowcaseModel() {
     applyDroneNeonColor(droneNeonColor);
     applyDroneBodyColor(droneBodyColor);
     applyDronePropColor(dronePropColor);
+    applyDroneSkin(droneSkinId);
   } catch (error) {
     console.error('The uploaded showcase drone could not be loaded.', error);
   }
@@ -9801,6 +9955,8 @@ function saveSettings() {
       droneNeonColor,
       droneBodyColor,
       dronePropColor,
+      droneCountryFlagCode,
+      droneSkin: droneSkinId,
       soundEnabled,
       lobbyMusicEnabled,
       audioVolume,
@@ -11691,6 +11847,10 @@ function setPage(page) {
   }
   if (page !== 'builder') setBuilderSettingsOpen(false);
   currentPage = page;
+  document.querySelector('#droneSkinPicker').hidden = true;
+  document.querySelector('#droneShopPanel').hidden = true;
+  document.querySelector('#hangarTopNav').hidden = flying || page === 'builder' || page === 'settings';
+  document.querySelectorAll('[data-hangar-tab]').forEach((button) => button.setAttribute('aria-pressed', 'false'));
   updateGameChatUI();
   if (page === 'singleplayer' && gameChatEnabled) void refreshGameChat();
   updateBuilderRelayPodiumGateIndicators();
@@ -11804,6 +11964,84 @@ document.querySelectorAll('[data-menu-choice]').forEach((button) => button.addEv
   }
   setPage(['trackPicker', 'multiplayer', 'builderMenu', 'communityTracks'].includes(choice) && currentPage === choice ? 'singleplayer' : choice);
 }));
+const droneSkinPicker = document.querySelector('#droneSkinPicker');
+const droneShopPanel = document.querySelector('#droneShopPanel');
+const droneSkinStatus = document.querySelector('#droneSkinStatus');
+const droneSkinChoiceButtons = [...document.querySelectorAll('[data-drone-skin]')];
+const hangarTopNav = document.querySelector('#hangarTopNav');
+const hangarTabButtons = [...document.querySelectorAll('[data-hangar-tab]')];
+const droneCountrySelect = document.querySelector('#droneCountrySelect');
+const droneSkinCountryName = document.querySelector('#droneSkinCountryName');
+const droneSkinCountryPreview = document.querySelector('#droneSkinCountryPreview');
+const droneSkinCategory = document.querySelector('#droneSkinCategory');
+const droneSkinFreeCollection = document.querySelector('#droneSkinFreeCollection');
+const droneSkinPaidCollection = document.querySelector('#droneSkinPaidCollection');
+const updateDroneSkinCategory = () => {
+  const showPaidSkins = droneSkinCategory.value === 'paid';
+  droneSkinFreeCollection.hidden = showPaidSkins;
+  droneSkinPaidCollection.hidden = !showPaidSkins;
+};
+droneSkinCategory.addEventListener('change', updateDroneSkinCategory);
+droneCountryCatalog.slice().sort((left, right) => left.name.localeCompare(right.name, 'en')).forEach((country) => {
+  droneCountrySelect.add(new Option(country.name, country.code));
+});
+const updateDroneCountryPreviews = () => {
+  const country = droneCountryByCode.get(droneCountryFlagCode) || droneCountryByCode.get('us');
+  const flagUrl = new URL(`flags/4x3/${country.code}.svg`, document.baseURI).href;
+  droneSkinCountryName.textContent = `${country.name.toUpperCase()} FLAG`;
+  droneSkinCountryPreview.src = flagUrl;
+};
+droneCountrySelect.value = droneCountryFlagCode;
+updateDroneCountryPreviews();
+droneCountrySelect.addEventListener('change', () => {
+  droneCountryFlagCode = droneCountrySelect.value;
+  updateDroneCountryPreviews();
+  saveSettings();
+});
+const updateDroneSkinPicker = () => {
+  droneSkinChoiceButtons.forEach((button) => {
+    const selected = button.dataset.droneSkin === 'country-flag'
+      ? droneSkinId.startsWith('country:')
+      : button.dataset.droneSkin === droneSkinId;
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  droneSkinStatus.textContent = droneSkinId.startsWith('country:')
+    ? `${droneCountryByCode.get(droneCountryFlagCode)?.name.toUpperCase() || 'COUNTRY'} / TOP BODY / SELECTED`
+    : 'STANDARD / SELECTED';
+};
+droneSkinChoiceButtons.forEach((button) => button.addEventListener('click', () => {
+  applyDroneSkin(button.dataset.droneSkin, droneCountrySelect.value);
+  updateDroneSkinPicker();
+  saveSettings();
+}));
+document.querySelector('#droneSkinClose').addEventListener('click', () => { droneSkinPicker.hidden = true; });
+const openHangarTab = (tab) => {
+  const showSkins = tab === 'skins';
+  droneSkinPicker.hidden = !showSkins;
+  droneShopPanel.hidden = showSkins;
+  hangarTabButtons.forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.hangarTab === tab));
+  });
+  updateDroneSkinPicker();
+};
+hangarTabButtons.forEach((button) => button.addEventListener('click', () => {
+  const selectedTab = button.dataset.hangarTab;
+  const panelIsOpen = selectedTab === 'skins' ? !droneSkinPicker.hidden : !droneShopPanel.hidden;
+  if (panelIsOpen) {
+    droneSkinPicker.hidden = true;
+    droneShopPanel.hidden = true;
+    button.setAttribute('aria-pressed', 'false');
+    return;
+  }
+  openHangarTab(selectedTab);
+}));
+document.querySelector('#droneShopClose').addEventListener('click', () => { droneShopPanel.hidden = true; });
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || (droneSkinPicker.hidden && droneShopPanel.hidden)) return;
+  droneSkinPicker.hidden = true;
+  droneShopPanel.hidden = true;
+  hangarTabButtons.forEach((button) => button.setAttribute('aria-pressed', 'false'));
+});
 const menuChoiceStrip = document.querySelector('#menuChoiceStrip');
 const menuChoiceDrag = { pointerId: null, startX: 0, startScrollLeft: 0, active: false };
 let suppressMenuChoiceClick = false;
@@ -12002,7 +12240,6 @@ const cameraAngleQuat = new THREE.Quaternion();
 const axisX = new THREE.Vector3(1, 0, 0);
 const axisY = new THREE.Vector3(0, 1, 0);
 const axisZ = new THREE.Vector3(0, 0, 1);
-const flightCameraModelOffset = new THREE.Vector3(0, 0.08, 0.46);
 const flightCameraWorldOffset = new THREE.Vector3();
 const flightCameraForward = new THREE.Vector3();
 const flightCameraDesiredPosition = new THREE.Vector3();
@@ -12260,6 +12497,7 @@ function beginFlightFireCrash() {
   if (flightDamageState.crashed) return;
   flightDamageState.burning = true;
   flightDamageState.crashed = true;
+  destroyedFlightWasGrounded = false;
   flight.throttle = 0;
   flight.motorOutput = 0;
   deformFlightArmsForDestruction();
@@ -12427,6 +12665,7 @@ function resetFlightDamage() {
   flightDamageState.brokenArms.fill(false);
   flightDamageState.burning = false;
   flightDamageState.crashed = false;
+  destroyedFlightWasGrounded = false;
   flightDamageState.lastImpactAt = 0;
   flightDamageState.smokeSpawnTime = 0;
   flightDamageState.fireSpawnTime = 0;
@@ -16814,28 +17053,32 @@ function updateDestroyedFlight(dt) {
   const groundY = flightGroundYAt(flight.position.x, flight.position.z, flight.position.y);
   const groundClearance = flightGroundClearance();
   const grounded = groundY > -9990 && flight.position.y < groundY + groundClearance;
+  const newGroundImpact = grounded && !destroyedFlightWasGrounded;
+  if (!grounded) destroyedFlightWasGrounded = false;
   if (grounded) {
-    const contactOffset = flightGroundContactOffset().clone();
     const previousVelocity = flight.velocity.clone();
-    const hasRollMomentum = previousVelocity.lengthSq() >= flightDamageMinimumImpactSpeed ** 2;
+    const impactSpeed = previousVelocity.length();
     flight.position.y = groundY + groundClearance;
-    flight.velocity.y = Math.max(0, -flight.velocity.y) * 0.18;
+    flight.velocity.y = Math.min(1.5, Math.max(0, -flight.velocity.y) * 0.1);
     const groundSlideRetention = Math.exp(-1.1 * dt);
     flight.velocity.x *= groundSlideRetention;
     flight.velocity.z *= groundSlideRetention;
-    if (hasRollMomentum) {
+    if (newGroundImpact && impactSpeed >= 7.5) {
+      const contactOffset = flightGroundContactOffset(flight.orientation, previousVelocity).clone();
       flightCollisionImpulse.subVectors(previousVelocity, flight.velocity);
       flightCollisionTorque.crossVectors(contactOffset, flightCollisionImpulse)
-        .multiplyScalar(flightCollisionInverseInertia);
+        .multiplyScalar(flightCollisionInverseInertia * 0.45);
       flight.impactAngularVelocity.add(flightCollisionTorque);
     }
+    if (flight.impactAngularVelocity.length() > 4.2) flight.impactAngularVelocity.setLength(4.2);
+    destroyedFlightWasGrounded = true;
   }
   const tumbleSpeed = flight.impactAngularVelocity.length();
   if (tumbleSpeed > 0.001) {
     flight.impactAngularAxis.copy(flight.impactAngularVelocity).divideScalar(tumbleSpeed);
     flight.impactAngularStep.setFromAxisAngle(flight.impactAngularAxis, tumbleSpeed * dt);
     flight.orientation.premultiply(flight.impactAngularStep).normalize();
-    flight.impactAngularVelocity.multiplyScalar(Math.exp(-(grounded ? 2.6 : 1.5) * dt));
+    flight.impactAngularVelocity.multiplyScalar(Math.exp(-(grounded ? 4 : 1.5) * dt));
   }
 
   flight.speed = flight.velocity.length() * 3.6;

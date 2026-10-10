@@ -161,6 +161,10 @@
       </aside>
 
       <section id="menu" class="menu-layout" data-page="singleplayer">
+        <nav id="hangarTopNav" class="hangar-top-nav" aria-label="Hangar">
+          <button type="button" data-hangar-tab="skins" aria-pressed="false">SKINS</button>
+          <button type="button" data-hangar-tab="shop" aria-pressed="false">SHOP</button>
+        </nav>
         <section class="content-stage">
           <div class="stage-kicker" hidden><span class="stage-cross">✳</span><span id="stageKicker">PILOT // SELECT A FLIGHT</span><span class="stage-kicker-line"></span><span id="stageLocation" class="stage-location">NIGHT CIRCUIT&nbsp; / &nbsp;NEON DOCKS</span></div>
 
@@ -662,6 +666,36 @@
       </div>
 
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <aside id="droneSkinPicker" class="drone-skin-picker" role="dialog" aria-label="Drone skins" hidden>
+        <header class="drone-skin-heading">
+          <div><span>HANGAR / APPEARANCE</span><h2>Drone skins</h2></div>
+          <button id="droneSkinClose" type="button" aria-label="Close drone skins">×</button>
+        </header>
+        <label class="drone-shop-filter" for="droneSkinCategory"><span>SKIN COLLECTION</span><select id="droneSkinCategory"><option value="free">Free skins</option><option value="paid">Paid</option></select></label>
+        <div id="droneSkinFreeCollection" class="drone-skin-free-collection">
+          <div class="drone-skin-choices" role="group" aria-label="Choose a free drone skin">
+            <button class="drone-skin-choice" type="button" data-drone-skin="standard" aria-pressed="false">
+              <span class="drone-skin-standard-preview" aria-hidden="true"><i></i></span>
+              <span><strong>STANDARD</strong><small>Custom colors</small></span>
+            </button>
+            <button class="drone-skin-choice" type="button" data-drone-skin="country-flag" aria-pressed="false">
+              <img id="droneSkinCountryPreview" width="152" height="80" alt="" />
+              <span><strong id="droneSkinCountryName">COUNTRY FLAG</strong><small>Top body livery</small></span>
+            </button>
+          </div>
+          <label class="drone-shop-filter" for="droneCountrySelect"><span>COUNTRY FLAG</span><select id="droneCountrySelect" aria-label="Choose a country flag"></select></label>
+        </div>
+        <div id="droneSkinPaidCollection" class="drone-shop-paid-empty" hidden><span>PAID SKINS</span><strong>COMING SOON</strong></div>
+        <p id="droneSkinStatus" class="drone-skin-status" role="status" aria-live="polite"></p>
+      </aside>
+      <aside id="droneShopPanel" class="drone-skin-picker drone-shop-panel" role="dialog" aria-label="Drone skin shop" hidden>
+        <header class="drone-skin-heading">
+          <div><span>HANGAR / FUTURE COLLECTIONS</span><h2>Shop</h2></div>
+          <button id="droneShopClose" type="button" aria-label="Close drone shop">×</button>
+        </header>
+        <div class="drone-shop-paid-empty"><span>PAID SKINS</span><strong>COMING SOON</strong></div>
+        <p class="drone-skin-status">NEW PAID COSMETICS WILL APPEAR HERE</p>
+      </aside>
       <section id="authModal" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="authHeading" hidden>
         <div class="auth-card">
           <button id="authClose" class="auth-close" type="button" aria-label="Close account window">×</button>

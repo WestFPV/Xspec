@@ -1253,6 +1253,37 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
 .friends-button-label { color: rgba(221,237,246,.64); }
 .friends-online-dot { width: 6px; height: 6px; border-radius: 50%; background: #68f5b4; box-shadow: 0 0 9px rgba(104,245,180,.74); }
 .friends-panel { position: absolute; z-index: 20; top: 76px; right: 28px; width: min(365px, calc(100vw - 24px)); max-height: min(76vh, 680px); padding: 16px; overflow-y: auto; border: 1px solid rgba(112,222,255,.28); background: linear-gradient(155deg, rgba(9,21,37,.98), rgba(7,14,27,.97)); color: #eff7fb; box-shadow: 0 20px 58px rgba(0,0,0,.48); backdrop-filter: blur(18px); }
+.drone-skin-picker[hidden] { display: none !important; }
+.drone-skin-picker { position: fixed; z-index: 24; top: 50%; left: 50%; width: min(310px, calc(100vw - 28px)); max-height: min(78vh, 620px); padding: 13px; display: grid; gap: 10px; overflow-y: auto; transform: translate(-50%, -50%); border: 1px solid rgba(116,232,255,.34); background: rgba(5,13,23,.94); color: var(--paper); box-shadow: 0 18px 54px rgba(0,0,0,.46); backdrop-filter: blur(14px); }
+.hangar-top-nav[hidden] { display: none !important; }
+.hangar-top-nav { position: fixed; z-index: 23; top: 83px; left: 50%; display: flex; align-items: center; gap: 24px; transform: translateX(-50%); pointer-events: auto; }
+.hangar-top-nav button { position: relative; padding: 5px 2px 8px; border: 0; background: transparent; color: rgba(242,242,233,.65); font: 700 9px var(--mono); letter-spacing: .12em; cursor: pointer; }
+.hangar-top-nav button::after { position: absolute; right: 0; bottom: 2px; left: 0; height: 1px; background: transparent; content: ''; transition: background .16s ease; }
+.hangar-top-nav button:hover, .hangar-top-nav button:focus-visible, .hangar-top-nav button[aria-pressed="true"] { outline: none; color: #fff; }
+.hangar-top-nav button[aria-pressed="true"]::after { background: var(--acid); box-shadow: 0 0 8px rgba(100,239,255,.5); }
+.drone-skin-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.drone-skin-heading span { color: var(--acid); font: 700 7px var(--mono); letter-spacing: .12em; }
+.drone-skin-heading h2 { margin: 3px 0 0; font: 700 18px/.95 var(--display); text-transform: uppercase; }
+.drone-skin-heading button { width: 28px; height: 28px; border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--paper); font: 20px/1 var(--mono); cursor: pointer; }
+.drone-skin-choices { display: grid; gap: 6px; }
+.drone-skin-choice { min-height: 54px; padding: 6px; display: grid; grid-template-columns: 66px 1fr; align-items: center; gap: 10px; border: 1px solid rgba(237,239,224,.13); background: rgba(255,255,255,.025); color: var(--paper); text-align: left; cursor: pointer; }
+.drone-skin-choice:hover, .drone-skin-choice:focus-visible { outline: none; border-color: rgba(116,232,255,.55); background: rgba(76,190,220,.08); }
+.drone-skin-choice[aria-pressed="true"] { border-color: var(--acid); background: rgba(76,190,220,.12); box-shadow: inset 2px 0 var(--acid); }
+.drone-skin-choice > span:last-child { display: grid; gap: 4px; }
+.drone-skin-choice strong { font: 700 8px var(--mono); letter-spacing: .06em; }
+.drone-skin-choice small { color: var(--subtle); font: 7px var(--mono); }
+.drone-skin-choice img, .drone-skin-standard-preview { width: 66px; height: 36px; border: 1px solid rgba(237,239,224,.18); object-fit: cover; }
+.drone-skin-standard-preview { display: grid; place-items: center; background: linear-gradient(145deg, #172b41, #09131f); }
+.drone-skin-standard-preview i { width: 34px; height: 12px; border: 1px solid #52e8ff; background: #45dfff; clip-path: polygon(20% 0,80% 0,100% 45%,72% 100%,28% 100%,0 45%); }
+.drone-skin-status { min-height: 10px; margin: 0; color: rgba(237,239,224,.48); font: 7px var(--mono); letter-spacing: .04em; }
+.drone-shop-filter { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; color: var(--subtle); font: 700 7px var(--mono); letter-spacing: .08em; }
+.drone-shop-filter select { min-width: 116px; padding: 6px 22px 6px 8px; border: 1px solid rgba(237,239,224,.18); border-radius: 0; background: rgba(255,255,255,.04); color: var(--paper); font: 7px var(--mono); }
+.drone-shop-filter option { background: #10191c; color: var(--paper); }
+.drone-shop-paid-empty[hidden] { display: none !important; }
+.drone-shop-paid-empty { min-height: 78px; display: grid; place-content: center; gap: 6px; border: 1px solid rgba(237,239,224,.12); background: rgba(255,255,255,.02); text-align: center; }
+.drone-shop-paid-empty span { color: var(--subtle); font: 7px var(--mono); letter-spacing: .1em; }
+.drone-shop-paid-empty strong { color: var(--acid); font: 700 11px var(--display); letter-spacing: .05em; }
+.drone-skin-free-collection { display: grid; gap: 9px; }
 .friends-panel[hidden] { display: none; }
 .friends-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid rgba(174,216,239,.12); }
 .friends-panel-heading h2 { margin: 0; font: 700 22px/.95 var(--display); letter-spacing: .035em; }
