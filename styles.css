@@ -450,6 +450,8 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
 .race-leaderboard-row.is-leading { background: rgba(93,213,180,.09); color: #eafff7; }
 .race-leaderboard-row.is-leading .race-leaderboard-place, .race-leaderboard-row.is-leading .race-leaderboard-progress { color: #8ef4c7; }
 .race-leaderboard-row.is-local .race-leaderboard-name { color: #8fe7ff; }
+.solo-race-leaderboard .race-leaderboard-row { grid-template-columns: 25px minmax(0, 1fr) auto; }
+.solo-race-leaderboard .race-leaderboard-progress { color: #8ef4c7; font-size: 8px; font-variant-numeric: tabular-nums; }
 .relay-race-timing { position: absolute; top: 79px; right: 4.2%; width: min(260px, calc(100vw - 32px)); padding: 9px 10px 7px; border: 1px solid rgba(151,218,247,.2); background: rgba(5,14,24,.72); color: var(--paper); text-shadow: 0 2px 10px rgba(0,0,0,.55); backdrop-filter: blur(8px); }
 .relay-race-timing[hidden] { display: none; }
 .relay-team-row { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; padding: 6px 4px; border-top: 1px solid rgba(220,240,250,.08); color: rgba(230,241,247,.7); }
@@ -581,6 +583,7 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
   .hud-left { left: 18px; top: auto; bottom: 18px; }
   .hud-right { right: 18px; top: 30%; width: 80px; }
   .race-leaderboard { top: 67px; left: 12px; width: min(198px, calc(100vw - 24px)); }
+  .solo-race-leaderboard { top: 67px; right: 12px; left: auto; width: min(198px, calc(100vw - 24px)); }
   .relay-race-timing { top: auto; right: 12px; bottom: 84px; width: min(210px, calc(100vw - 24px)); }
   .race-leaderboard-row { min-height: 20px; grid-template-columns: 17px minmax(0, 1fr) 31px; gap: 5px; }
   .race-leaderboard-name { font-size: 8px; }
@@ -1866,6 +1869,21 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--acid); cursor:
 .track-picker-footer button:hover { border-color: #86eaff; background: linear-gradient(110deg, rgba(32,156,192,.85), rgba(35,113,163,.82)); box-shadow: 0 0 18px rgba(59,194,225,.16); }
 .track-picker-footer button b { color: #8ce8fb; font: 15px var(--mono); }
 .track-picker-empty-message { margin: 8px 0 0; color: rgba(200,222,237,.68); font: 7px/1.5 var(--mono); }
+#trackLeaderboardButton { border-color: rgba(137,190,215,.28); background: rgba(8,24,40,.58); color: rgba(221,240,250,.8); }
+#trackLeaderboardButton:hover:not(:disabled) { border-color: rgba(115,229,255,.62); background: rgba(19,73,95,.62); color: #eafaff; box-shadow: 0 0 16px rgba(59,194,225,.12); }
+.track-leaderboard-dialog { width: min(460px, calc(100vw - 32px)); max-height: min(78vh, 680px); margin: auto; padding: 0; overflow: auto; border: 1px solid rgba(92,200,231,.38); background: linear-gradient(145deg, #10253b, #081526); color: #eff8fc; box-shadow: 0 24px 80px rgba(0,0,0,.65), inset 0 0 35px rgba(68,175,205,.06); }
+.track-leaderboard-dialog::backdrop { background: rgba(2,8,16,.78); backdrop-filter: blur(5px); }
+.track-leaderboard-shell { padding: 20px; }
+.track-leaderboard-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 13px; border-bottom: 1px solid rgba(130,183,205,.16); }
+.track-leaderboard-header h2 { margin: 7px 0 4px; color: #f3f9ff; font: 700 20px/1.05 var(--display); text-transform: uppercase; }
+.track-leaderboard-header p { margin: 0; color: #8deaff; font: 700 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.track-leaderboard-close { width: 29px; height: 29px; flex: 0 0 29px; border: 1px solid rgba(137,190,215,.28); background: rgba(8,24,40,.58); color: rgba(221,240,250,.8); font: 18px/1 var(--mono); cursor: pointer; }
+.track-leaderboard-close:hover, .track-leaderboard-close:focus-visible { border-color: rgba(115,229,255,.62); color: #eafaff; outline: none; }
+.track-leaderboard-rows { display: grid; gap: 3px; margin: 13px 0 0; padding: 0; list-style: none; }
+.track-leaderboard-rows .race-leaderboard-row { min-height: 30px; grid-template-columns: 25px minmax(0, 1fr) auto; gap: 8px; padding: 4px 7px; }
+.track-leaderboard-rows .race-leaderboard-place, .track-leaderboard-rows .race-leaderboard-progress { font-size: 9px; }
+.track-leaderboard-empty { margin: 15px 0 4px; color: rgba(200,222,237,.66); font: 8px/1.5 var(--mono); }
+.track-leaderboard-footer { margin-top: 14px; padding-top: 9px; border-top: 1px solid rgba(130,183,205,.12); color: rgba(190,225,240,.42); font: 6px var(--mono); letter-spacing: .1em; }
 @media (max-width: 760px) {
   #menu[data-page="trackPicker"] .content-stage > .content-panel[data-panel="trackPicker"] {
     top: calc(50% - 31px);

@@ -197,7 +197,7 @@
               <label class="quick-select" for="trackSelect"><span>TRACK</span><select id="trackSelect" aria-label="Choose a track" disabled><option value="">No tracks available</option></select></label>
             </div>
             <p id="trackPickerEmptyMessage" class="track-picker-empty-message">No built-in tracks yet. Create one in Track Builder.</p>
-            <footer class="track-picker-footer"><button id="trackPickerDone" type="button" disabled>START FLIGHT <b aria-hidden="true">→</b></button></footer>
+            <footer class="track-picker-footer"><button id="trackLeaderboardButton" type="button" disabled>LEADERBOARD</button><button id="trackPickerDone" type="button" disabled>START FLIGHT <b aria-hidden="true">→</b></button></footer>
           </section>
 
           <section class="content-panel community-tracks-panel" data-panel="communityTracks" aria-labelledby="communityTracksTitle" hidden>
@@ -623,6 +623,7 @@
         <div id="courseProgress" class="course-progress" aria-live="polite" hidden><b id="courseProgressCount">Lap: 1/1</b></div>
         <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b></div>
         <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
+        <aside id="soloRaceLeaderboard" class="race-leaderboard solo-race-leaderboard" aria-label="Solo race result" aria-live="polite" hidden><span class="race-leaderboard-heading">SOLO LEADERBOARD</span><ol id="soloRaceLeaderboardRows"></ol></aside>
         <aside id="relayRaceTiming" class="relay-race-timing" aria-label="Relay team splits and lap times" hidden><span class="race-leaderboard-heading">TEAM RELAY / LAP TIMES</span><div id="relayRaceTeams"></div></aside>
         <div id="raceStartOverlay" class="race-start-overlay" role="status" aria-live="assertive" hidden><span id="raceStartLabel">RACE STARTS IN</span><strong id="raceStartNumber">5</strong><small id="raceStartDetail">HOLD POSITION ON THE PODIUM</small></div>
         <div class="flight-reticle" aria-hidden="true"><i></i><b></b><i></i><em></em></div>
@@ -694,6 +695,17 @@
           <small class="auth-footnote">Codes expire after 10 minutes. Never share a sign-in code.</small>
         </div>
       </section>
+      <dialog id="trackLeaderboardDialog" class="track-leaderboard-dialog" aria-labelledby="trackLeaderboardTitle">
+        <div class="track-leaderboard-shell">
+          <header class="track-leaderboard-header">
+            <div><span class="panel-overline">SOLO FLIGHT / PERSONAL RECORDS</span><h2 id="trackLeaderboardTitle">TRACK LEADERBOARD</h2><p id="trackLeaderboardTrackName"></p></div>
+            <button id="closeTrackLeaderboard" class="track-leaderboard-close" type="button" aria-label="Close leaderboard">×</button>
+          </header>
+          <ol id="trackLeaderboardRows" class="track-leaderboard-rows" aria-live="polite"></ol>
+          <p id="trackLeaderboardEmpty" class="track-leaderboard-empty" role="status" hidden>No solo times saved for this track yet.</p>
+          <footer class="track-leaderboard-footer">YOUR BEST 10 RUNS / SAVED ON THIS DEVICE</footer>
+        </div>
+      </dialog>
     </main>
   </body>
 </html>

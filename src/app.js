@@ -4471,6 +4471,27 @@ const environmentLightProfiles = {
   'neon-docks': { skyFill: 0x465873, groundFill: 0x0c1219, moon: 0x8298c2, accent: 0x55c7df, fog: 0x0b1420, ambient: 0.26, moonIntensity: 0.38, fillIntensity: 0.11, environment: 0.08, exposure: 0.9 },
 };
 const trackCatalog = standardRaceTracks;
+const soloTrackLeaderboardStorageKey = 'aerframe-solo-track-leaderboards';
+let soloTrackLeaderboardData = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(soloTrackLeaderboardStorageKey) || '{}');
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+    return Object.fromEntries(Object.entries(saved).map(([trackKey, runs]) => [
+      trackKey,
+      (Array.isArray(runs) ? runs : [])
+        .filter((run) => run && Number.isFinite(run.timeMs) && run.timeMs > 0 && run.timeMs <= 24 * 60 * 60 * 1000)
+        .map((run) => ({
+          username: typeof run.username === 'string' ? run.username.slice(0, 24) : 'YOU',
+          timeMs: Math.round(run.timeMs),
+          completedAt: Number.isFinite(run.completedAt) ? run.completedAt : 0,
+        }))
+        .sort((a, b) => a.timeMs - b.timeMs || a.completedAt - b.completedAt)
+        .slice(0, 10),
+    ]));
+  } catch {
+    return {};
+  }
+})();
 let publishedCommunityTracks = [];
 const communityFavoritesStorageKey = 'aerframe-community-favorites';
 let communityFavoriteTrackIds = (() => {
@@ -4746,6 +4767,8 @@ function updateTrackPickerPreview() {
   if (emptyMessage) emptyMessage.hidden = Boolean(track);
   const startButton = document.querySelector('#trackPickerDone');
   if (startButton) startButton.disabled = !track;
+  const leaderboardButton = document.querySelector('#trackLeaderboardButton');
+  if (leaderboardButton) leaderboardButton.disabled = !track;
   const trackSelect = document.querySelector('#trackSelect');
   if (trackSelect) trackSelect.disabled = !tracks.length;
   if (!canvas) return;
@@ -10809,6 +10832,17 @@ document.querySelector('#trackPickerDone').addEventListener('click', () => {
   selectedMode = 'Race';
   enterFlight();
 });
+document.querySelector('#trackLeaderboardButton').addEventListener('click', () => {
+  if (!activeTrack) return;
+  renderSoloTrackLeaderboard();
+  document.querySelector('#trackLeaderboardDialog').showModal();
+});
+document.querySelector('#closeTrackLeaderboard').addEventListener('click', () => {
+  document.querySelector('#trackLeaderboardDialog').close();
+});
+document.querySelector('#trackLeaderboardDialog').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
 document.querySelector('#settingsButton').addEventListener('click', () => {
   if (currentPage === 'settings') {
     setPage(pageBeforeSettings);
@@ -10887,6 +10921,7 @@ let generatedTrackLaunchPodium = null;
 let raceTimerEnabled = false;
 let raceTimerStartedAt = 0;
 let raceTimerFinishedAt = 0;
+let soloRaceLeaderboardTimeout = 0;
 const flight = {
   position: new THREE.Vector3(0, 5, 20),
   velocity: new THREE.Vector3(),
@@ -10955,8 +10990,99 @@ function updateCourseProgress(nextIndex, complete = false) {
   if (complete && raceTimerEnabled) {
     raceTimerFinishedAt = performance.now();
     updateRaceTimerDisplay(raceTimerFinishedAt);
+    showSoloRaceLeaderboard();
   }
   updateRaceLeaderboard();
+}
+
+function soloTrackLeaderboardKey(track = activeTrack) {
+  if (!track?.id) return '';
+  return `${activeBiome}:${track.id}:${signedInUser?.id || 'guest'}`;
+}
+
+function formatSoloRaceTime(timeMs) {
+  const elapsed = Math.max(0, Number(timeMs) || 0);
+  const minutes = Math.floor(elapsed / 60_000).toString().padStart(2, '0');
+  const seconds = ((elapsed % 60_000) / 1000).toFixed(2).padStart(5, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function saveSoloTrackRaceTime(timeMs) {
+  const key = soloTrackLeaderboardKey();
+  if (builderTestCourse || !key || !Number.isFinite(timeMs) || timeMs <= 0) return null;
+  const run = {
+    username: signedInUser?.username || 'YOU',
+    timeMs: Math.round(timeMs),
+    completedAt: Date.now(),
+  };
+  const ranked = [...(soloTrackLeaderboardData[key] || []), run]
+    .sort((a, b) => a.timeMs - b.timeMs || a.completedAt - b.completedAt);
+  const place = ranked.indexOf(run) + 1;
+  soloTrackLeaderboardData[key] = ranked.slice(0, 10);
+  try { localStorage.setItem(soloTrackLeaderboardStorageKey, JSON.stringify(soloTrackLeaderboardData)); }
+  catch { /* Keep this session's times available if browser storage is unavailable. */ }
+  return { place };
+}
+
+function renderSoloTrackLeaderboard() {
+  const trackName = document.querySelector('#trackLeaderboardTrackName');
+  const rows = document.querySelector('#trackLeaderboardRows');
+  const emptyMessage = document.querySelector('#trackLeaderboardEmpty');
+  const track = activeTrack;
+  if (!trackName || !rows || !emptyMessage || !track) return;
+  trackName.textContent = track.name || 'Selected track';
+  const runs = soloTrackLeaderboardData[soloTrackLeaderboardKey(track)] || [];
+  rows.replaceChildren();
+  emptyMessage.hidden = runs.length > 0;
+  runs.forEach((run, index) => {
+    const row = document.createElement('li');
+    row.className = 'race-leaderboard-row is-local';
+    const place = document.createElement('b');
+    place.className = 'race-leaderboard-place';
+    place.textContent = String(index + 1);
+    const name = document.createElement('span');
+    name.className = 'race-leaderboard-name';
+    name.textContent = run.username === 'YOU' ? 'YOU' : `YOU / ${run.username}`;
+    const time = document.createElement('small');
+    time.className = 'race-leaderboard-progress';
+    time.textContent = formatSoloRaceTime(run.timeMs);
+    row.append(place, name, time);
+    rows.append(row);
+  });
+}
+
+function hideSoloRaceLeaderboard() {
+  if (soloRaceLeaderboardTimeout) window.clearTimeout(soloRaceLeaderboardTimeout);
+  soloRaceLeaderboardTimeout = 0;
+  const panel = document.querySelector('#soloRaceLeaderboard');
+  if (panel) panel.hidden = true;
+}
+
+function showSoloRaceLeaderboard() {
+  if (!raceTimerEnabled || !raceTimerStartedAt || isMultiplayerRaceActive()) return;
+  const panel = document.querySelector('#soloRaceLeaderboard');
+  const rows = document.querySelector('#soloRaceLeaderboardRows');
+  if (!panel || !rows) return;
+  const elapsed = Math.max(0, raceTimerFinishedAt - raceTimerStartedAt);
+  const resultTime = formatSoloRaceTime(elapsed);
+  const savedResult = saveSoloTrackRaceTime(elapsed);
+  const row = document.createElement('li');
+  row.className = 'race-leaderboard-row is-leading is-local';
+  const place = document.createElement('b');
+  place.className = 'race-leaderboard-place';
+  place.textContent = String(savedResult?.place || 1);
+  const name = document.createElement('span');
+  name.className = 'race-leaderboard-name';
+  name.textContent = signedInUser?.username ? `YOU / ${signedInUser.username}` : 'YOU';
+  const time = document.createElement('small');
+  time.className = 'race-leaderboard-progress';
+  time.textContent = resultTime;
+  row.append(place, name, time);
+  rows.replaceChildren(row);
+  panel.setAttribute('aria-label', `Solo race result: you finished in ${resultTime}`);
+  panel.hidden = false;
+  if (soloRaceLeaderboardTimeout) window.clearTimeout(soloRaceLeaderboardTimeout);
+  soloRaceLeaderboardTimeout = window.setTimeout(hideSoloRaceLeaderboard, 5000);
 }
 
 function isMultiplayerRaceActive() {
@@ -11295,6 +11421,7 @@ function prepareFlightCourse() {
 function restartLocalRace(source = 'keyboard') {
   if (!flying || !raceTimerEnabled || !launchPadState || !flightCourseEntries.length || isMultiplayerRaceActive()) return false;
 
+  hideSoloRaceLeaderboard();
   flightCourseEntries.forEach((entry) => {
     entry.passed = false;
     if (entry.indicator) entry.indicator.visible = false;
@@ -12212,6 +12339,7 @@ async function enterFlight() {
     const built = safeApplyBiome(activeBiome, false);
     if (!built || built.id !== activeBiome) return;
   }
+  hideSoloRaceLeaderboard();
   unlockGateAudio();
   if (currentPage === 'builder') setBuilderSettingsOpen(false);
   flying = true;
@@ -12268,6 +12396,7 @@ async function enterFlight() {
 
 function exitFlight() {
   if (!flying) return;
+  hideSoloRaceLeaderboard();
   const leaveWaitingLobby = partyRacePhase === 'waiting' && partyLobby?.status === 'open';
   if (leaveWaitingLobby) {
     partyRaceFinished = true;
