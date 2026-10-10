@@ -85,6 +85,8 @@ export class AppState {
     this.state = state;
     this.environment = environment;
     this.queue = Promise.resolve();
+    this.flightPositionSnapshots = new Map();
+    this.cachedState = null;
     this.state.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS state_chunks (chunk_index INTEGER PRIMARY KEY, payload TEXT NOT NULL)',
     );
@@ -137,12 +139,16 @@ export class AppState {
 
   async handle(request) {
     try {
-      const persisted = await this.readState();
-      configureWorkerState(this.environment, persisted, this.writeState);
+      const transientPositionRequest = new URL(request.url).pathname === '/api/lobby/positions';
+      const persisted = this.cachedState || await this.readState();
+      configureWorkerState(this.environment, persisted, this.writeState, { flightPositionSnapshots: this.flightPositionSnapshots });
       const adapter = responseAdapter();
       const nodeRequest = requestAdapter(request);
       await dispatchApiRequest(nodeRequest, adapter, new URL(request.url));
-      await this.writeState(exportWorkerState());
+      if (!transientPositionRequest) {
+        this.cachedState = exportWorkerState();
+        await this.writeState(this.cachedState);
+      }
       return adapter.toResponse();
     } catch (error) {
       console.error('Xspec API request failed.', error);

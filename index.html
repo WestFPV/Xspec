@@ -527,7 +527,7 @@
               </div>
 
               <section class="race-restart-settings" aria-labelledby="raceRestartSettingsTitle">
-                <div class="race-restart-settings-copy"><span class="panel-overline">RACE CONTROLS</span><strong id="raceRestartSettingsTitle">Race &amp; drone reset</strong><p>Bind separate controller buttons to restart the race or return your drone to its starting position.</p></div>
+                <div class="race-restart-settings-copy"><span class="panel-overline">RACE CONTROLS</span><strong id="raceRestartSettingsTitle">Race &amp; drone reset</strong><p>Bind separate controller buttons to restart the race or re-level your drone at its current position.</p></div>
                 <div class="race-restart-options">
                   <div><span>RESTART RACE</span><button id="bindRaceRestartButton" class="small-outline-button" type="button">BIND CONTROLLER BUTTON</button></div>
                   <div><span>RESET DRONE</span><button id="bindResetDroneButton" class="small-outline-button" type="button">BIND CONTROLLER BUTTON</button></div>
@@ -566,9 +566,9 @@
             </section>
             <section id="settingsCameraPanel" class="settings-subpanel" role="tabpanel" aria-labelledby="settingsCameraTab" data-settings-content="camera" hidden>
               <div class="settings-list">
-                <label class="setting-row" for="fovRange"><span><strong>Camera field of view</strong><small>Wider view, more speed</small></span><input id="fovRange" type="range" min="85" max="130" value="108" /><output id="fovValue">108°</output></label>
-                <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="60" value="22" /><output id="angleValue">22°</output></label>
-                <label class="setting-row" for="qualitySelect"><span><strong>Render quality</strong><small>Adjust resolution for your display</small></span><select id="qualitySelect"><option value="1">Performance</option><option value="1.35">Balanced</option><option value="1.8" selected>High</option></select></label>
+                <label class="setting-row" for="fovRange"><span><strong>Camera field of view</strong><small>Wider view, more speed</small></span><input id="fovRange" type="range" min="85" max="130" value="90" /><output id="fovValue">90°</output></label>
+                <label class="setting-row" for="angleRange"><span><strong>FPV camera angle</strong><small>Pitch the lens up for speed</small></span><input id="angleRange" type="range" min="5" max="60" value="45" /><output id="angleValue">45°</output></label>
+                <label class="setting-row" for="qualitySelect"><span><strong>Render quality</strong><small>Adjust resolution for your display</small></span><select id="qualitySelect"><option value="1">Performance</option><option value="1.35">Balanced</option><option value="1.8" selected>High</option><option value="2.1">Super</option></select></label>
                 <label class="setting-row" for="droneNeonColor"><span><strong>Drone LED color</strong><small>Glow color for the arms and LEDs</small></span><input id="droneNeonColor" type="color" value="#52e8ff" /><output id="droneNeonColorValue">#52E8FF</output></label>
                 <label class="setting-row" for="droneBodyColor"><span><strong>Drone center body</strong><small>Change the blue body panels; windshield stays black</small></span><input id="droneBodyColor" type="color" value="#45dfff" /><output id="droneBodyColorValue">#45DFFF</output></label>
                 <label class="setting-row" for="dronePropColor"><span><strong>Propeller color</strong><small>Color all four propellers</small></span><input id="dronePropColor" type="color" value="#45dfff" /><output id="dronePropColorValue">#45DFFF</output></label>
@@ -576,6 +576,7 @@
                 <div class="setting-row"><span><strong>Center reticle</strong><small>Crosshair and dot while flying</small></span><button id="reticleToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
                 <div class="setting-row"><span><strong>In-game chat</strong><small>Show lobby and world messages</small></span><button id="gameChatToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
                 <div class="setting-row"><span><strong>Motion vignette</strong><small>Subtle edge shade while flying</small></span><button id="vignetteToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
+                <div class="setting-row"><span><strong>Race line</strong><small>Show the transparent course route while racing</small></span><button id="raceLineToggle" class="switch is-on" type="button" role="switch" aria-checked="true"><i></i><span>ON</span></button></div>
               </div>
               <div class="settings-bottom"><span><span class="tiny-pip"></span> SAVED LOCALLY</span><button id="resetSettings" class="text-button" type="button">RESET DEFAULTS</button></div>
             </section>
@@ -623,7 +624,12 @@
         <div id="courseProgress" class="course-progress" aria-live="polite" hidden><b id="courseProgressCount">Lap: 1/1</b></div>
         <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b></div>
         <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
-        <aside id="soloRaceLeaderboard" class="race-leaderboard solo-race-leaderboard" aria-label="Solo race result" aria-live="polite" hidden><span class="race-leaderboard-heading">SOLO LEADERBOARD</span><ol id="soloRaceLeaderboardRows"></ol></aside>
+        <aside id="raceFinishLeaderboard" class="race-leaderboard race-finish-leaderboard" aria-label="Race leaderboard" aria-live="polite" hidden>
+          <header class="race-finish-leaderboard-header"><div><span id="raceFinishLeaderboardHeading" class="race-leaderboard-heading">RACE LEADERBOARD</span><strong id="raceFinishLeaderboardTrack"></strong></div></header>
+          <ol id="raceFinishLeaderboardRows"></ol>
+          <p id="raceFinishLeaderboardEmpty" class="race-finish-leaderboard-empty" hidden>No recorded times for this track yet.</p>
+          <nav id="raceFinishLeaderboardPager" class="race-finish-leaderboard-pager" aria-label="Leaderboard pages" hidden><button id="raceFinishLeaderboardPrev" type="button">PREV</button><span id="raceFinishLeaderboardPage"></span><button id="raceFinishLeaderboardNext" type="button">NEXT</button></nav>
+        </aside>
         <aside id="relayRaceTiming" class="relay-race-timing" aria-label="Relay team splits and lap times" hidden><span class="race-leaderboard-heading">TEAM RELAY / LAP TIMES</span><div id="relayRaceTeams"></div></aside>
         <div id="raceStartOverlay" class="race-start-overlay" role="status" aria-live="assertive" hidden><span id="raceStartLabel">RACE STARTS IN</span><strong id="raceStartNumber">5</strong><small id="raceStartDetail">HOLD POSITION ON THE PODIUM</small></div>
         <div class="flight-reticle" aria-hidden="true"><i></i><b></b><i></i><em></em></div>
@@ -651,8 +657,8 @@
         <button id="flightCameraToggle" class="flight-camera-toggle" type="button" aria-expanded="false" aria-controls="flightCameraPanel">CAMERA SETTINGS</button>
         <section id="flightCameraPanel" class="flight-camera-panel" aria-label="Live camera settings" hidden>
           <header><strong>LIVE CAMERA</strong><small>CHANGES APPLY IMMEDIATELY</small></header>
-          <label for="flightFovRange"><span>FIELD OF VIEW <output id="flightFovValue">108°</output></span><input id="flightFovRange" type="range" min="85" max="130" value="108" /></label>
-          <label for="flightAngleRange"><span>CAMERA ANGLE <output id="flightAngleValue">22°</output></span><input id="flightAngleRange" type="range" min="5" max="60" value="22" /></label>
+          <label for="flightFovRange"><span>FIELD OF VIEW <output id="flightFovValue">90°</output></span><input id="flightFovRange" type="range" min="85" max="130" value="90" /></label>
+          <label for="flightAngleRange"><span>CAMERA ANGLE <output id="flightAngleValue">45°</output></span><input id="flightAngleRange" type="range" min="5" max="60" value="45" /></label>
         </section>
       </div>
 
@@ -698,12 +704,13 @@
       <dialog id="trackLeaderboardDialog" class="track-leaderboard-dialog" aria-labelledby="trackLeaderboardTitle">
         <div class="track-leaderboard-shell">
           <header class="track-leaderboard-header">
-            <div><span class="panel-overline">SOLO FLIGHT / PERSONAL RECORDS</span><h2 id="trackLeaderboardTitle">TRACK LEADERBOARD</h2><p id="trackLeaderboardTrackName"></p></div>
+            <div><span class="panel-overline">RACE RECORDS / TRACK RANKINGS</span><h2 id="trackLeaderboardTitle">TRACK LEADERBOARD</h2><p id="trackLeaderboardTrackName"></p></div>
             <button id="closeTrackLeaderboard" class="track-leaderboard-close" type="button" aria-label="Close leaderboard">×</button>
           </header>
           <ol id="trackLeaderboardRows" class="track-leaderboard-rows" aria-live="polite"></ol>
-          <p id="trackLeaderboardEmpty" class="track-leaderboard-empty" role="status" hidden>No solo times saved for this track yet.</p>
-          <footer class="track-leaderboard-footer">YOUR BEST 10 RUNS / SAVED ON THIS DEVICE</footer>
+          <p id="trackLeaderboardEmpty" class="track-leaderboard-empty" role="status" hidden>No recorded times for this track yet.</p>
+          <nav id="trackLeaderboardPager" class="track-leaderboard-pager" aria-label="Leaderboard pages" hidden><button id="trackLeaderboardPrev" type="button">PREV</button><span id="trackLeaderboardPage"></span><button id="trackLeaderboardNext" type="button">NEXT</button></nav>
+          <footer class="track-leaderboard-footer">TRACK RECORDS / 10 TIMES PER PAGE</footer>
         </div>
       </dialog>
     </main>

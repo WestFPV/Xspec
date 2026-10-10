@@ -27,8 +27,22 @@ let pendingAccountSetups = new Map();
 let rateWindows = new Map();
 let friendPresence = new Map();
 let localSaveQueue = Promise.resolve();
+let flightPositionSnapshots = new Map();
 const communityTrackGameModes = new Set(['4v4', 'relay-race', 'prop-hunt']);
-let store = { users: [], sessions: [], lobbies: [], worldChat: [], friendships: [], friendRequests: [], teams: [], communityTracks: [] };
+let store = { users: [], sessions: [], lobbies: [], worldChat: [], friendships: [], friendRequests: [], teams: [], communityTracks: [], trackRecords: [] };
+
+function collapseTrackRecords(records = []) {
+  const bestByPilot = new Map();
+  for (const record of records) {
+    const key = `${record.biomeId}\u0000${record.trackId}\u0000${record.userId}`;
+    const previous = bestByPilot.get(key);
+    if (!previous || record.timeMs < previous.timeMs
+      || (record.timeMs === previous.timeMs && Number(record.updatedAt) > Number(previous.updatedAt))) {
+      bestByPilot.set(key, record);
+    }
+  }
+  return [...bestByPilot.values()];
+}
 
 function setting(name) {
   return runtimeEnvironment[name] ?? '';
@@ -52,6 +66,12 @@ function normalizeStore(saved = {}) {
         .filter((track) => track.id && track.name && track.biomeId && Array.isArray(track.points) && typeof track.imageDataUrl === 'string')
         .map((track) => ({ ...track, gameMode: communityTrackGameModes.has(track.gameMode) ? track.gameMode : '4v4' }))
       : [],
+    trackRecords: collapseTrackRecords(Array.isArray(saved.trackRecords)
+      ? saved.trackRecords.filter((record) => record && typeof record.trackId === 'string' && typeof record.biomeId === 'string'
+        && typeof record.userId === 'string' && typeof record.username === 'string'
+        && Number.isSafeInteger(record.timeMs) && record.timeMs > 0 && Number.isFinite(record.updatedAt))
+        .map((record) => ({ ...record, username: displayUsername(record.username) }))
+      : []),
   };
 }
 
@@ -66,7 +86,7 @@ export async function initializeLocalStore() {
   }
 }
 
-export function configureWorkerState(environment, state, persist) {
+export function configureWorkerState(environment, state, persist, runtime = null) {
   runtimeEnvironment = environment;
   codeSecret = environment.AUTH_CODE_SECRET || '';
   store = normalizeStore(state?.store);
@@ -74,6 +94,7 @@ export function configureWorkerState(environment, state, persist) {
   pendingAccountSetups = new Map(state?.pendingAccountSetups || []);
   rateWindows = new Map(state?.rateWindows || []);
   friendPresence = new Map(state?.friendPresence || []);
+  if (runtime?.flightPositionSnapshots instanceof Map) flightPositionSnapshots = runtime.flightPositionSnapshots;
   persistOverride = persist;
 }
 
@@ -187,6 +208,76 @@ function handleLeaderboard(request, response) {
     .sort((a, b) => b.xp - a.xp || a.username.localeCompare(b.username))
     .slice(0, 5);
   return json(response, 200, { leaders, nextTournament: nextTournament() });
+}
+
+function trackLeaderboardExists(biomeId, trackId) {
+  if (!standardRaceTracks[biomeId] || typeof trackId !== 'string' || !trackId || trackId.length > 160) return false;
+  return standardRaceTracks[biomeId].some((track) => track.id === trackId)
+    || store.communityTracks.some((track) => track.id === trackId && track.biomeId === biomeId);
+}
+
+function sortedTrackRecords(biomeId, trackId) {
+  return collapseTrackRecords(store.trackRecords
+    .filter((record) => record.biomeId === biomeId && record.trackId === trackId)
+    .sort((a, b) => a.timeMs - b.timeMs || a.username.localeCompare(b.username)))
+    .sort((a, b) => a.timeMs - b.timeMs || a.username.localeCompare(b.username));
+}
+
+function publicTrackRecords(biomeId, trackId, userId = '') {
+  return sortedTrackRecords(biomeId, trackId).slice(0, 1000).map((record) => ({
+    username: displayUsername(record.username),
+    timeMs: record.timeMs,
+    isLocal: Boolean(userId && record.userId === userId),
+  }));
+}
+
+function upsertTrackRecord({ biomeId, trackId, userId, username, timeMs }) {
+  const existing = collapseTrackRecords(store.trackRecords.filter((record) => record.biomeId === biomeId && record.trackId === trackId && record.userId === userId))[0];
+  if (existing && existing.timeMs <= timeMs) return false;
+  const record = { biomeId, trackId, userId, username: displayUsername(username), timeMs: Math.round(timeMs), updatedAt: Date.now() };
+  const trackRecords = store.trackRecords.filter((candidate) => !(candidate.biomeId === biomeId && candidate.trackId === trackId && candidate.userId === userId));
+  trackRecords.push(record);
+  const rankedTrack = trackRecords
+    .filter((candidate) => candidate.biomeId === biomeId && candidate.trackId === trackId)
+    .sort((a, b) => a.timeMs - b.timeMs || a.username.localeCompare(b.username))
+    .slice(0, 1000);
+  const retained = new Set(rankedTrack.map((candidate) => candidate.userId));
+  store.trackRecords = trackRecords.filter((candidate) => candidate.biomeId !== biomeId || candidate.trackId !== trackId || retained.has(candidate.userId));
+  return true;
+}
+
+async function handleTrackLeaderboard(request, response, url) {
+  if (!verifySameOrigin(request)) return json(response, 403, { error: 'This track leaderboard request was rejected.' });
+  const user = currentUser(request);
+  if (request.method === 'GET') {
+    const biomeId = url.searchParams.get('biomeId') || '';
+    const trackId = url.searchParams.get('trackId') || '';
+    if (!trackLeaderboardExists(biomeId, trackId)) return json(response, 404, { error: 'This track leaderboard is unavailable.' });
+    return json(response, 200, { records: publicTrackRecords(biomeId, trackId, user?.id || '') });
+  }
+  if (request.method !== 'POST') return json(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, POST' });
+  if (!user) return json(response, 401, { error: 'Sign in to save a track leaderboard time.' });
+  let body;
+  try { body = await readJson(request, 2048); }
+  catch (error) { return json(response, error.status || 400, { error: error.message }); }
+  const biomeId = typeof body?.biomeId === 'string' ? body.biomeId : '';
+  const trackId = typeof body?.trackId === 'string' ? body.trackId : '';
+  const timeMs = Number(body?.timeMs);
+  if (!trackLeaderboardExists(biomeId, trackId)) return json(response, 404, { error: 'This track leaderboard is unavailable.' });
+  if (!Number.isSafeInteger(timeMs) || timeMs < 500 || timeMs > 24 * 60 * 60 * 1000) {
+    return json(response, 400, { error: 'Race time is outside the supported range.' });
+  }
+  if (!allowRate(`track-record:${user.id}`, 120, 60 * 60_000)) return json(response, 429, { error: 'Too many track times were submitted. Try again later.' });
+  const previousRecords = store.trackRecords;
+  const updated = upsertTrackRecord({ biomeId, trackId, userId: user.id, username: user.username, timeMs });
+  if (updated) {
+    try { await saveStore(); }
+    catch {
+      store.trackRecords = previousRecords;
+      return json(response, 500, { error: 'Could not save this track time. Please try again.' });
+    }
+  }
+  return json(response, 200, { updated, records: publicTrackRecords(biomeId, trackId, user.id) });
 }
 
 function allowRate(key, limit, intervalMs) {
@@ -695,6 +786,7 @@ function publicCommunityTrack(track) {
     gateEntryDirections: Array.isArray(track.gateEntryDirections) ? track.gateEntryDirections : [],
     laps: Number.isSafeInteger(track.laps) && track.laps >= 1 && track.laps <= 5 ? track.laps : 1,
     objects: Array.isArray(track.objects) ? track.objects : [],
+    raceLine: Array.isArray(track.raceLine) ? track.raceLine : null,
     imageDataUrl: track.imageDataUrl,
     ownerName: track.ownerName,
     createdAt: track.createdAt,
@@ -769,6 +861,16 @@ async function handleCommunityTracks(request, response) {
   const gateEntryDirections = Array.isArray(submittedEntryDirections)
     ? submittedEntryDirections.map((directions) => Array.isArray(directions) ? [...directions] : [directions])
     : [];
+
+  let raceLine = null;
+  if (body.raceLine !== undefined && body.raceLine !== null) {
+    if (!Array.isArray(body.raceLine) || body.raceLine.length < 3 || body.raceLine.length > 240 || body.raceLine.length % 3 !== 0
+      || body.raceLine.some((point) => !Array.isArray(point) || point.length !== 3
+        || point.some((value) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 500))) {
+      return json(response, 400, { error: 'The track race line contains invalid points.' });
+    }
+    raceLine = body.raceLine.map((point) => point.map((value) => Math.round(value * 100) / 100));
+  }
 
   const requestedObjects = body.objects ?? [];
   if (!Array.isArray(requestedObjects) || requestedObjects.length > 100) return json(response, 400, { error: 'A track can include up to 100 environment objects.' });
@@ -857,6 +959,7 @@ async function handleCommunityTracks(request, response) {
     gateEntryDirections,
     laps,
     objects,
+    raceLine,
     imageDataUrl: body.imageDataUrl,
     ownerName: user ? displayUsername(user.username) : 'Guest Pilot',
     createdAt: new Date().toISOString(),
@@ -1088,6 +1191,19 @@ function validPosition(value) {
     && value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate) && Math.abs(coordinate) <= 1200);
 }
 
+function validFlightVelocity(value) {
+  return Array.isArray(value) && value.length === 3
+    && value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate) && Math.abs(coordinate) <= 125)
+    && Math.hypot(...value) <= 125;
+}
+
+function validFlightOrientation(value) {
+  if (!Array.isArray(value) || value.length !== 4
+    || !value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate) && Math.abs(coordinate) <= 1.1)) return false;
+  const length = Math.hypot(...value);
+  return length >= 0.8 && length <= 1.2;
+}
+
 function verifyRaceCheckpoint(lobby, gateIndex, crossing, member, now) {
   const frame = raceGateFrame(lobby, gateIndex);
   if (!frame || !validPosition(crossing?.previous) || !validPosition(crossing?.current)) return null;
@@ -1120,6 +1236,10 @@ function verifyRaceCheckpoint(lobby, gateIndex, crossing, member, now) {
 function cleanLobbies() {
   const now = Date.now();
   store.lobbies = store.lobbies.filter((lobby) => now - lobby.updatedAt < lobbyLifetimeMs);
+  const activeLobbyIds = new Set(store.lobbies.map((lobby) => lobby.id));
+  for (const lobbyId of flightPositionSnapshots.keys()) {
+    if (!activeLobbyIds.has(lobbyId)) flightPositionSnapshots.delete(lobbyId);
+  }
   for (const lobby of store.lobbies) {
     lobby.members = lobby.members.filter((member) => now - member.lastSeenAt < lobbyHeartbeatMs);
     if (!lobby.members.length) continue;
@@ -1423,6 +1543,42 @@ async function handleLobby(request, response, url) {
   let body;
   try { body = await readJson(request); }
   catch (error) { return json(response, error.status || 400, { error: error.message }); }
+
+  if (url.pathname === '/api/lobby/positions') {
+    const lobby = lobbyForUser(user.id);
+    if (!lobby) return json(response, 409, { error: 'Join a flight party before syncing drone positions.' });
+    if (!validPosition(body.position) || !validFlightVelocity(body.velocity) || !validFlightOrientation(body.orientation)) {
+      return json(response, 400, { error: 'The drone flight state is invalid.' });
+    }
+    const now = Date.now();
+    let snapshots = flightPositionSnapshots.get(lobby.id);
+    if (!snapshots) {
+      snapshots = new Map();
+      flightPositionSnapshots.set(lobby.id, snapshots);
+    }
+    const previous = snapshots.get(user.id);
+    if (previous && now - previous.receivedAt < 35) {
+      return json(response, 429, { error: 'Drone position updates are arriving too quickly.' });
+    }
+    snapshots.set(user.id, {
+      position: body.position,
+      velocity: body.velocity,
+      orientation: body.orientation,
+      updatedAt: now,
+      receivedAt: now,
+    });
+    const states = [];
+    for (const [memberId, state] of snapshots) {
+      if (now - state.updatedAt > 1500) {
+        snapshots.delete(memberId);
+        continue;
+      }
+      if (memberId === user.id) continue;
+      states.push({ id: memberId, position: state.position, velocity: state.velocity, orientation: state.orientation, updatedAt: state.updatedAt });
+    }
+    if (!snapshots.size) flightPositionSnapshots.delete(lobby.id);
+    return json(response, 200, { states, serverTime: now });
+  }
 
   if (url.pathname === '/api/lobby/chat') {
     const channel = body.channel === 'world' ? 'world' : body.channel === 'lobby' ? 'lobby' : '';
@@ -1908,6 +2064,7 @@ async function handleLobby(request, response, url) {
     const previousLobby = { updatedAt: lobby.updatedAt, status: lobby.status, startAt: lobby.startAt, raceAt: lobby.raceAt, results: lobby.results };
     const pilot = store.users.find((candidate) => candidate.id === user.id);
     const team = !didNotFinish && firstFinish ? teamForUser(user.id) : null;
+    const previousTrackRecords = store.trackRecords;
     const previousPilotXp = pilot?.xp;
     const previousTeamXp = team?.xp;
     const previousFirstPlaces = new Map(store.users.map((candidate) => [candidate.id, candidate.firstPlaces]));
@@ -1923,6 +2080,15 @@ async function handleLobby(request, response, url) {
           teamXpAwarded = true;
         }
       }
+      if (!didNotFinish && member.raceStartedAt && lobby.gameMode !== 'relay-race') {
+        upsertTrackRecord({
+          biomeId: lobby.biome,
+          trackId: lobby.trackId,
+          userId: user.id,
+          username: user.username,
+          timeMs: now - member.raceStartedAt,
+        });
+      }
     }
     if (lobby.members.every((candidate) => candidate.finishedAt)) settleLobbyRace(lobby);
     lobby.updatedAt = now;
@@ -1935,6 +2101,7 @@ async function handleLobby(request, response, url) {
       lobby.startAt = previousLobby.startAt;
       lobby.raceAt = previousLobby.raceAt;
       lobby.results = previousLobby.results;
+      store.trackRecords = previousTrackRecords;
       if (pilot) pilot.xp = previousPilotXp;
       if (team) team.xp = previousTeamXp;
       store.users.forEach((candidate) => { candidate.firstPlaces = previousFirstPlaces.get(candidate.id); });
@@ -1987,6 +2154,11 @@ export async function serveProduction(request, response, url) {
 }
 
 export async function dispatchApiRequest(request, response, url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)) {
+  if (url.pathname === '/api/track-leaderboard') {
+    try { await handleTrackLeaderboard(request, response, url); }
+    catch { if (!response.headersSent) json(response, 500, { error: 'Track leaderboard service encountered an error.' }); else response.destroy(); }
+    return;
+  }
   if (url.pathname === '/api/leaderboard') {
     try { handleLeaderboard(request, response); }
     catch { if (!response.headersSent) json(response, 500, { error: 'Leaderboard service encountered an error.' }); else response.destroy(); }

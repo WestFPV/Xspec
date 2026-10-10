@@ -393,18 +393,31 @@ const flightCollisionTorque = new THREE.Vector3();
 const flightCollisionTangentVelocity = new THREE.Vector3();
 const flightCollisionAngularAxis = new THREE.Vector3();
 const flightCollisionAngularStep = new THREE.Quaternion();
+const flightCollisionMotorOffsets = [
+  [-1.28, -0.84],
+  [-1.28, 0.84],
+  [1.28, -0.84],
+  [1.28, 0.84],
+];
+const flightPilotCollisionRestitution = 0.34;
+const flightPilotCollisionTangentialRetention = 0.94;
 const flightCollisionBodySpheres = [
-  { offset: new THREE.Vector3(0, 0, 0), radius: 0.3, sphere: new THREE.Sphere() },
-  ...[
-    [-1.28, -0.84],
-    [-1.28, 0.84],
-    [1.28, -0.84],
-    [1.28, 0.84],
-  ].flatMap(([x, z]) => [
-    { offset: new THREE.Vector3(x * 0.5, 0, z * 0.5), radius: 0.22, sphere: new THREE.Sphere() },
-    { offset: new THREE.Vector3(x, 0, z), radius: 0.22, sphere: new THREE.Sphere() },
+  { part: 'body', motorIndex: -1, offset: new THREE.Vector3(0, 0, 0), radius: 0.3, sphere: new THREE.Sphere() },
+  ...flightCollisionMotorOffsets.flatMap(([x, z], motorIndex) => [
+    { part: 'arm', motorIndex, offset: new THREE.Vector3(x * 0.5, 0, z * 0.5), radius: 0.22, sphere: new THREE.Sphere() },
+    { part: 'prop', motorIndex, offset: new THREE.Vector3(x, 0, z), radius: 0.22, sphere: new THREE.Sphere() },
   ]),
 ];
+const flightPilotRemoteSpheres = flightCollisionBodySpheres.map(({ part, motorIndex, offset, radius }) => ({
+  part, motorIndex, offset, radius, sphere: new THREE.Sphere(),
+}));
+const flightPilotPosition = new THREE.Vector3();
+const flightPilotNormal = new THREE.Vector3();
+const flightPilotRelativeVelocity = new THREE.Vector3();
+const flightPilotTangentialVelocity = new THREE.Vector3();
+const flightPilotImpulse = new THREE.Vector3();
+const flightPilotTorque = new THREE.Vector3();
+const flightPilotRemoteQuaternion = new THREE.Quaternion();
 const environmentRoot = new THREE.Group();
 const gateRoot = new THREE.Group();
 const trackRoot = new THREE.Group();
@@ -421,6 +434,34 @@ builderRaceLinePathRoot.name = 'Race line path tubes';
 const builderRaceLineHandleRoot = new THREE.Group();
 builderRaceLineHandleRoot.name = 'Movable race line control points';
 builderRaceLineRoot.add(builderRaceLinePathRoot, builderRaceLineHandleRoot);
+const flightRaceLineRoot = new THREE.Group();
+flightRaceLineRoot.name = 'Transparent in-flight race line';
+flightRaceLineRoot.visible = false;
+const flightDebrisRoot = new THREE.Group();
+flightDebrisRoot.name = 'Broken drone parts';
+const flightDamageEffectsRoot = new THREE.Group();
+flightDamageEffectsRoot.name = 'Drone smoke and fire';
+const flightDamageMinimumImpactSpeed = 7.5;
+const flightPropellerBreakImpactSpeed = 9;
+const flightArmBreakImpactSpeed = 16;
+const flightFireCrashImpactSpeed = 28;
+const flightSmokeDamageThreshold = 76;
+const flightDamageState = {
+  damage: 0,
+  brokenProps: Array(4).fill(false),
+  brokenArms: Array(4).fill(false),
+  burning: false,
+  crashed: false,
+  lastImpactAt: 0,
+  smokeSpawnTime: 0,
+  fireSpawnTime: 0,
+};
+const flightDebris = [];
+const flightDamageParticles = [];
+let flightSmokeTexture = null;
+let flightFireTexture = null;
+const flightDamageArmMaterial = new THREE.MeshStandardMaterial({ color: 0x202933, roughness: 0.58, metalness: 0.28 });
+const flightDamageBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x111923, roughness: 0.42, metalness: 0.18 });
 let builderRaceLineGenerated = false;
 let builderRaceLinePoints = [];
 let builderRaceLineHandles = [];
@@ -481,7 +522,7 @@ let competitiveBannerData = { leaders: [], teams: [], nextTournament: null };
 let competitiveBannerSlide = 0;
 let citySignTextures = null;
 let playgroundGateStructures = null;
-world.add(environmentRoot, gateRoot, trackRoot, communityPropRoot, builderPropRoot, builderRaceLineRoot, builderGhostRoot, builderFlightRoot, biomeLightRoot, menuBackdropRoot, menuPlatformCollisionRoot, menuCityRoot, menuStageRoot, menuAmbientRoot, menuInfoBannerRoot);
+world.add(environmentRoot, gateRoot, trackRoot, communityPropRoot, builderPropRoot, builderRaceLineRoot, flightRaceLineRoot, flightDebrisRoot, flightDamageEffectsRoot, builderGhostRoot, builderFlightRoot, biomeLightRoot, menuBackdropRoot, menuPlatformCollisionRoot, menuCityRoot, menuStageRoot, menuAmbientRoot, menuInfoBannerRoot);
 const flightCollisionTarget = new THREE.Vector3();
 const flightCollisionDelta = new THREE.Vector3();
 const flightCollisionMatrix = new THREE.Matrix4();
@@ -570,6 +611,7 @@ function resolveFlightWorldCollision() {
   const rotationDistance = 2 * Math.acos(orientationDot) * flightCollisionExtent;
   const stepCount = Math.max(1, Math.ceil((travelDistance + rotationDistance) / flightCollisionStepDistance));
   let collided = false;
+  let strongestImpact = null;
   for (let step = 1; step <= stepCount; step += 1) {
     flight.position.copy(previousFlightPosition).addScaledVector(flightCollisionDelta, step / stepCount);
     flightCollisionStepOrientation.copy(previousFlightOrientation).slerp(flight.orientation, step / stepCount);
@@ -580,24 +622,35 @@ function resolveFlightWorldCollision() {
     for (let iteration = 0; iteration < 5; iteration += 1) {
       let contact = null;
       let contactSphere = null;
-      for (const { sphere } of flightCollisionBodySpheres) {
-        const sphereContact = flightCollisionOctree.sphereIntersect(sphere);
+      for (const bodySphere of flightCollisionBodySpheres) {
+        if ((bodySphere.part === 'prop' && flightDamageState.brokenProps[bodySphere.motorIndex])
+          || (bodySphere.part === 'arm' && flightDamageState.brokenArms[bodySphere.motorIndex])) continue;
+        const sphereContact = flightCollisionOctree.sphereIntersect(bodySphere.sphere);
         if (sphereContact && (!contact || sphereContact.depth > contact.depth)) {
           contact = sphereContact;
-          contactSphere = sphere;
+          contactSphere = bodySphere;
         }
       }
       if (!contact) break;
       const normal = contact.normal;
       if (normal.lengthSq() < 0.5) break;
       const correction = contact.depth + 0.002;
-      flightCollisionArm.copy(contactSphere.center)
-        .addScaledVector(normal, -contactSphere.radius)
+      flightCollisionArm.copy(contactSphere.sphere.center)
+        .addScaledVector(normal, -contactSphere.sphere.radius)
         .sub(flight.position);
       flightCollisionBodySpheres.forEach(({ sphere }) => sphere.center.addScaledVector(normal, correction));
       flight.position.addScaledVector(normal, correction);
       const intoSurface = flight.velocity.dot(normal);
       if (intoSurface < 0) {
+        const impactSpeed = -intoSurface;
+        if (!strongestImpact || impactSpeed > strongestImpact.speed) {
+          strongestImpact = {
+            speed: impactSpeed,
+            part: contactSphere.part,
+            motorIndex: contactSphere.motorIndex,
+            normal: normal.clone(),
+          };
+        }
         const normalImpulse = -(1 + flightCollisionRestitution) * intoSurface;
         flightCollisionImpulse.copy(normal).multiplyScalar(normalImpulse);
         flight.velocity.add(flightCollisionImpulse);
@@ -614,6 +667,81 @@ function resolveFlightWorldCollision() {
     if (collided) break;
   }
   if (collided) flight.velocity.multiplyScalar(0.985);
+  return strongestImpact;
+}
+
+function resolveFlightPilotCollisions() {
+  if (!flying || !partyLobby || !partyFlightSnapshots.size) return null;
+  const now = performance.now();
+  let strongestImpact = null;
+  const activeLocalSpheres = flightCollisionBodySpheres.filter(({ part, motorIndex }) =>
+    !((part === 'prop' && flightDamageState.brokenProps[motorIndex])
+      || (part === 'arm' && flightDamageState.brokenArms[motorIndex])));
+
+  for (const state of partyFlightSnapshots.values()) {
+    const stateAge = now - state.receivedAt;
+    if (stateAge > 750) continue;
+    flightPilotPosition.copy(state.position).addScaledVector(state.velocity, Math.min(0.18, Math.max(0, stateAge / 1000)));
+    flightPilotRemoteQuaternion.copy(state.orientation);
+    flightPilotRemoteSpheres.forEach(({ offset, radius, sphere }) => {
+      sphere.center.copy(offset).applyQuaternion(flightPilotRemoteQuaternion).add(flightPilotPosition);
+      sphere.radius = radius;
+    });
+
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      let contact = null;
+      let contactLocalSphere = null;
+      let contactRemoteSphere = null;
+      activeLocalSpheres.forEach(({ offset, radius, sphere }) => {
+        sphere.center.copy(offset).applyQuaternion(flight.orientation).add(flight.position);
+        sphere.radius = radius;
+      });
+      for (const localSphere of activeLocalSpheres) {
+        for (const remoteSphere of flightPilotRemoteSpheres) {
+          const distance = localSphere.sphere.center.distanceTo(remoteSphere.sphere.center);
+          const depth = localSphere.sphere.radius + remoteSphere.sphere.radius - distance;
+          if (depth > 0 && (!contact || depth > contact.depth)) {
+            contact = { depth, distance };
+            contactLocalSphere = localSphere;
+            contactRemoteSphere = remoteSphere;
+          }
+        }
+      }
+      if (!contact) break;
+
+      flightPilotNormal.subVectors(contactLocalSphere.sphere.center, contactRemoteSphere.sphere.center);
+      if (contact.distance > 0.0001) flightPilotNormal.multiplyScalar(1 / contact.distance);
+      else if (flight.velocity.lengthSq() > 0.01) flightPilotNormal.copy(flight.velocity).normalize().negate();
+      else flightPilotNormal.set(1, 0, 0);
+      flightCollisionArm.copy(contactLocalSphere.sphere.center).sub(flight.position);
+      flight.position.addScaledVector(flightPilotNormal, Math.min(1.25, contact.depth + 0.002));
+
+      flightPilotRelativeVelocity.subVectors(flight.velocity, state.velocity);
+      const intoContact = flightPilotRelativeVelocity.dot(flightPilotNormal);
+      if (intoContact < 0) {
+        const impactSpeed = -intoContact;
+        if (!strongestImpact || impactSpeed > strongestImpact.speed) {
+          strongestImpact = {
+            speed: impactSpeed,
+            part: contactLocalSphere.part,
+            motorIndex: contactLocalSphere.motorIndex,
+            normal: flightPilotNormal.clone(),
+          };
+        }
+        const impulseMagnitude = -(1 + flightPilotCollisionRestitution) * intoContact * 0.5;
+        flightPilotImpulse.copy(flightPilotNormal).multiplyScalar(impulseMagnitude);
+        flight.velocity.add(flightPilotImpulse);
+        flightPilotTangentialVelocity.copy(flightPilotRelativeVelocity)
+          .addScaledVector(flightPilotNormal, -intoContact);
+        flight.velocity.addScaledVector(flightPilotTangentialVelocity, (flightPilotCollisionTangentialRetention - 1) * 0.5);
+        flightPilotTorque.crossVectors(flightCollisionArm, flightPilotImpulse)
+          .multiplyScalar(flightCollisionInverseInertia);
+        flight.impactAngularVelocity.add(flightPilotTorque);
+        if (flight.impactAngularVelocity.length() > 8) flight.impactAngularVelocity.setLength(8);
+      }
+    }
+  }
+  return strongestImpact;
 }
 
 const builderSelectionHelper = new THREE.BoxHelper(new THREE.Object3D(), 0xff8a1d);
@@ -744,7 +872,11 @@ function drawMenuPodiumLabel(canvas, pilotName) {
   context.shadowBlur = 20;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  const label = String(pilotName || 'GUEST').trim().toLocaleUpperCase();
+  const label = String(pilotName || '').trim().toLocaleUpperCase();
+  if (!label) {
+    context.shadowBlur = 0;
+    return;
+  }
   const maxTextWidth = width - 100;
   let fontSize = 190;
   context.font = `900 ${fontSize}px Arial, sans-serif`;
@@ -760,7 +892,7 @@ function createMenuPodiumLabel(index) {
   const canvas = document.createElement('canvas');
   canvas.width = 1024;
   canvas.height = 256;
-  const label = index === 0 ? 'GUEST 1' : 'XSPEC';
+  const label = '';
   drawMenuPodiumLabel(canvas, label);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -858,6 +990,7 @@ function createRedRacePodium(labelFace = null) {
     const plateText = new THREE.Mesh(new THREE.PlaneGeometry(3.45, 0.52), labelFace);
     plateText.position.set(frontSide * 2.985, 2.85, 0);
     plateText.rotation.y = frontSide * Math.PI / 2;
+    plateText.userData.isPodiumNameplateText = true;
     podiumStructure.add(plateText);
   }
   for (const side of [-1, 1]) {
@@ -867,6 +1000,30 @@ function createRedRacePodium(labelFace = null) {
     podiumStructure.add(bolt);
   }
   return stand;
+}
+
+function setRacePodiumUsername(podium, pilotName) {
+  const username = String(pilotName || '').trim();
+  podium?.traverse((object) => {
+    if (!object.userData.isPodiumNameplateText || object.userData.podiumUsername === username) return;
+    let canvas = object.userData.podiumUsernameCanvas;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 256;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      const material = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+      object.userData.podiumUsernameCanvas = canvas;
+      object.userData.podiumUsernameTexture = texture;
+      object.userData.podiumUsernameMaterial = material;
+      object.material = material;
+    }
+    drawMenuPodiumLabel(canvas, username);
+    object.userData.podiumUsernameTexture.needsUpdate = true;
+    object.userData.podiumUsername = username;
+  });
 }
 
 function buildMenuDronePads() {
@@ -4476,7 +4633,7 @@ let soloTrackLeaderboardData = (() => {
   try {
     const saved = JSON.parse(localStorage.getItem(soloTrackLeaderboardStorageKey) || '{}');
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
-    return Object.fromEntries(Object.entries(saved).map(([trackKey, runs]) => [
+    const cleaned = Object.fromEntries(Object.entries(saved).filter(([trackKey]) => !trackKey.endsWith(':guest')).map(([trackKey, runs]) => [
       trackKey,
       (Array.isArray(runs) ? runs : [])
         .filter((run) => run && Number.isFinite(run.timeMs) && run.timeMs > 0 && run.timeMs <= 24 * 60 * 60 * 1000)
@@ -4485,9 +4642,12 @@ let soloTrackLeaderboardData = (() => {
           timeMs: Math.round(run.timeMs),
           completedAt: Number.isFinite(run.completedAt) ? run.completedAt : 0,
         }))
+        .filter((run) => run.username !== 'YOU' && run.username !== 'Guest Pilot')
         .sort((a, b) => a.timeMs - b.timeMs || a.completedAt - b.completedAt)
         .slice(0, 10),
     ]));
+    try { localStorage.setItem(soloTrackLeaderboardStorageKey, JSON.stringify(cleaned)); } catch { /* Keep guest entries out of this session if storage is unavailable. */ }
+    return cleaned;
   } catch {
     return {};
   }
@@ -7528,6 +7688,7 @@ function clearChildren(group) {
       if (object.userData.isBuilderGateBadge
         || object.userData.isGateModelStatusSign
         || object.userData.isRelayPodiumGateNumberBadge) object.material.map?.dispose();
+      if (object.userData.isPodiumNameplateText) object.userData.podiumUsernameTexture?.dispose();
       if (object.material && !Object.values(sharedMaterials).includes(object.material)) {
         (Array.isArray(object.material) ? object.material : [object.material]).forEach((material) => material.dispose());
       }
@@ -7682,12 +7843,26 @@ const partyDroneObjects = Array.from({ length: 3 }, (_, index) => {
   partyDroneRoot.add(drone);
   return drone;
 });
+const livePartyDroneObjects = Array.from({ length: 7 }, (_, index) => {
+  const drone = showDrone.clone(true);
+  drone.scale.setScalar(1.08);
+  drone.visible = false;
+  drone.userData.livePartySlot = index;
+  partyDroneRoot.add(drone);
+  return drone;
+});
 const displayedDroneNeonMeshes = new Set();
 const displayedDroneBodyMeshes = new Set();
 const displayedDronePropMeshes = new Set();
 enableShadowParticipation(showDrone);
 partyDroneObjects.forEach(enableShadowParticipation);
+livePartyDroneObjects.forEach(enableShadowParticipation);
 const partyDroneRotors = partyDroneObjects.map((drone) => {
+  const rotors = [];
+  drone.traverse((node) => { if (node.userData.isPartyRotor) rotors.push(node); });
+  return rotors;
+});
+const livePartyDroneRotors = livePartyDroneObjects.map((drone) => {
   const rotors = [];
   drone.traverse((node) => { if (node.userData.isPartyRotor) rotors.push(node); });
   return rotors;
@@ -7811,7 +7986,7 @@ async function loadDroneShowcaseModel() {
     const previousGeometries = new Set();
     const previousMaterials = new Set();
     const sharedMaterialSet = new Set([...Object.values(sharedMaterials), droneArmGlowMaterial]);
-    [showDrone, ...partyDroneObjects].forEach((drone) => {
+    [showDrone, ...partyDroneObjects, ...livePartyDroneObjects].forEach((drone) => {
       drone.traverse((node) => {
         if (!node.isMesh) return;
         if (node.geometry !== boxGeometry) previousGeometries.add(node.geometry);
@@ -7857,8 +8032,10 @@ async function loadDroneShowcaseModel() {
     };
     propellers.length = 0;
     partyDroneRotors.forEach((rotors) => { rotors.length = 0; });
+    livePartyDroneRotors.forEach((rotors) => { rotors.length = 0; });
     addModel(showDrone, null);
     partyDroneObjects.forEach((drone, index) => addModel(drone, partyDroneRotors[index]));
+    livePartyDroneObjects.forEach((drone, index) => addModel(drone, livePartyDroneRotors[index]));
     applyDroneNeonColor(droneNeonColor);
     applyDroneBodyColor(droneBodyColor);
     applyDronePropColor(dronePropColor);
@@ -7884,6 +8061,7 @@ const toast = document.querySelector('#toast');
 const authModal = document.querySelector('#authModal');
 let signedInUser = null;
 let partyLobby = null;
+const partyFlightSnapshots = new Map();
 let gameChatChannel = 'world';
 let gameChatCache = { lobby: [], world: [] };
 let gameChatLobbyCode = '';
@@ -7979,8 +8157,9 @@ let hudEnabled = storedSettings.hudEnabled !== false;
 let reticleEnabled = storedSettings.reticleEnabled !== false;
 let gameChatEnabled = storedSettings.gameChatEnabled !== false;
 let vignetteEnabled = storedSettings.vignetteEnabled !== false;
+let raceLineEnabled = storedSettings.raceLineEnabled !== false;
 let quality = Number(storedSettings.quality) || 1.8;
-let cameraAngle = THREE.MathUtils.clamp(Number(storedSettings.cameraAngle) || 22, 5, 60);
+let cameraAngle = THREE.MathUtils.clamp(Number(storedSettings.cameraAngle) || 45, 5, 60);
 let soundEnabled = storedSettings.soundEnabled === true;
 let lobbyMusicEnabled = storedSettings.lobbyMusicEnabled !== false;
 const storedAudioVolume = Number(storedSettings.audioVolume);
@@ -8070,6 +8249,8 @@ function builderTrackRequirementsMessage() {
 
 let partyPollTimer = 0;
 let gameChatPollTimer = 0;
+let partyPositionTimer = 0;
+let partyPositionRequestPending = false;
 let competitiveBannerPollTimer = 0;
 let competitiveBannerCycleTimer = 0;
 let teamPollTimer = 0;
@@ -8142,6 +8323,8 @@ function syncWorldMode() {
   communityPropRoot.visible = currentPage === 'trackPicker' || (!menuScene && currentPage !== 'builder');
   builderPropRoot.visible = currentPage === 'builder';
   builderRaceLineRoot.visible = currentPage === 'builder' && !flying && builderRaceLineGenerated;
+  flightRaceLineRoot.visible = flying && raceLineEnabled && flightRaceLineRoot.children.length > 0
+    && (selectedMode === 'Race' || isMultiplayerRaceActive() || builderTestCourse);
   builderGhostRoot.visible = currentPage === 'builder' && !flying && gatePlacementArmed;
   biomeLightRoot.visible = false;
   menuBackdropRoot.visible = menuSetVisible || platformOnlyScene;
@@ -8154,7 +8337,7 @@ function syncWorldMode() {
   defaultGateObjects.forEach((gate) => { gate.visible = !menuScene && currentPage !== 'builder'; });
   customGateObjects.forEach((gate) => { gate.visible = currentPage === 'builder'; });
   showDrone.visible = menuSetVisible;
-  partyDroneRoot.visible = menuSetVisible;
+  partyDroneRoot.visible = flying ? Boolean(partyLobby && partyLobby.members.length > 1) : menuSetVisible;
   fieldSpot.visible = false;
   bloomPass.strength = menuScene ? 0.26 : 0.42;
   updateWorldLightBalance();
@@ -8729,7 +8912,7 @@ function pollRestartGamepadButtons(pad) {
   const restartButtonDown = inputConfig.restartButton !== null && Boolean(buttonStates[inputConfig.restartButton]);
   const resetDroneButtonDown = inputConfig.resetDroneButton !== null && Boolean(buttonStates[inputConfig.resetDroneButton]);
   if (!justBound && restartButtonDown && !restartPadButtonWasDown) restartLocalRace('controller');
-  if (!justBound && resetDroneButtonDown && !resetDronePadButtonWasDown) resetDrone('controller');
+  if (!justBound && resetDroneButtonDown && !resetDronePadButtonWasDown) resetDrone();
   restartPadButtonWasDown = restartButtonDown;
   resetDronePadButtonWasDown = resetDroneButtonDown;
   previousGamepadButtons = buttonStates;
@@ -8878,6 +9061,7 @@ function saveSettings() {
       reticleEnabled,
       gameChatEnabled,
       vignetteEnabled,
+      raceLineEnabled,
       droneNeonColor,
       droneBodyColor,
       dronePropColor,
@@ -8981,6 +9165,63 @@ async function lobbyRequest(endpoint, payload = {}) {
   try { result = await response.json(); } catch { /* The service may return an empty body. */ }
   if (!response.ok) throw new Error(result.error || 'Could not update the flight party.');
   return result;
+}
+
+async function syncPartyFlightPositions() {
+  if (!flying || !partyLobby || !signedInUser?.id || partyLobby.members.length < 2 || partyPositionRequestPending) {
+    if (!partyLobby || partyLobby.members.length < 2) partyFlightSnapshots.clear();
+    return;
+  }
+  partyPositionRequestPending = true;
+  const lobbyCode = partyLobby.code;
+  const userId = signedInUser.id;
+  try {
+    const result = await lobbyRequest('positions', {
+      position: flight.position.toArray(),
+      velocity: flight.velocity.toArray(),
+      orientation: flight.orientation.toArray(),
+    });
+    if (!flying || partyLobby?.code !== lobbyCode || signedInUser?.id !== userId) return;
+    partyFlightSnapshots.clear();
+    for (const state of result.states || []) {
+      if (!Array.isArray(state.position) || !Array.isArray(state.velocity) || !Array.isArray(state.orientation)) continue;
+      partyFlightSnapshots.set(state.id, {
+        position: new THREE.Vector3().fromArray(state.position),
+        velocity: new THREE.Vector3().fromArray(state.velocity),
+        orientation: new THREE.Quaternion().fromArray(state.orientation).normalize(),
+        receivedAt: performance.now(),
+      });
+    }
+  } catch {
+    // Flight remains responsive if the position service briefly drops an update.
+  } finally {
+    partyPositionRequestPending = false;
+  }
+}
+
+function updatePartyDroneFlightVisuals(dt = 0.016) {
+  const active = Boolean(flying && partyLobby && partyLobby.members.length > 1);
+  const remoteMembers = active ? partyLobby.members.filter((member) => member.id !== signedInUser?.id) : [];
+  let visibleCount = 0;
+  livePartyDroneObjects.forEach((drone, index) => {
+    const member = remoteMembers[index];
+    const state = member ? partyFlightSnapshots.get(member.id) : null;
+    const stateAge = state ? performance.now() - state.receivedAt : Infinity;
+    drone.visible = Boolean(state && stateAge <= 750);
+    if (!drone.visible) {
+      drone.userData.livePilotId = null;
+      return;
+    }
+    visibleCount += 1;
+    const firstFrame = drone.userData.livePilotId !== member.id;
+    drone.userData.livePilotId = member.id;
+    flightPilotPosition.copy(state.position).addScaledVector(state.velocity, Math.min(0.18, Math.max(0, stateAge / 1000)));
+    const blend = firstFrame ? 1 : 1 - Math.exp(-dt * 18);
+    drone.position.lerp(flightPilotPosition, blend);
+    drone.quaternion.slerp(state.orientation, blend);
+  });
+  if (flying) partyDroneRoot.visible = visibleCount > 0;
+  else if (!active) livePartyDroneObjects.forEach((drone) => { drone.visible = false; });
 }
 
 function renderGameChatMessages() {
@@ -9446,18 +9687,18 @@ function buildPartySlot(member, index) {
   copy.append(name, detail);
   const status = document.createElement('span');
   status.className = 'party-slot-status';
-  status.textContent = isEmpty ? '＋' : member.isLocal ? 'YOU' : member.finishedAt ? (member.didNotFinish ? 'DNF' : 'DONE') : member.online === false ? 'AWAY' : member.ready ? 'READY' : 'LOADING';
+  status.textContent = isEmpty ? '＋' : member.finishedAt ? (member.didNotFinish ? 'DNF' : 'DONE') : member.online === false ? 'AWAY' : member.ready ? 'READY' : 'LOADING';
   slot.append(icon, copy, status);
   return slot;
 }
 
 function updateMenuPodiumLabels(lobby = partyLobby) {
-  const localPilotName = signedInUser?.username || signedInUser?.email?.split('@')[0] || '';
+  const localMember = lobby?.members?.find((member) => member.id === signedInUser?.id);
+  const localPilotName = localMember?.username || signedInUser?.username || '';
   const crew = (lobby?.members || []).filter((member) => member.id !== signedInUser?.id);
+  const podiumNames = [localPilotName, ...crew.map((member) => member.username || '')];
   menuPodiumLabels.forEach((podium, index) => {
-    const crewMember = index > 0 ? crew[index - 1] : null;
-    const pilotName = index === 0 ? localPilotName : crewMember?.username;
-    const label = String(pilotName || '').trim() || (index === 0 ? 'GUEST 1' : crewMember ? `GUEST ${index + 1}` : 'XSPEC');
+    const label = String(podiumNames[index] || '').trim();
     if (podium.label === label) return;
     drawMenuPodiumLabel(podium.canvas, label);
     podium.texture.needsUpdate = true;
@@ -9471,6 +9712,7 @@ function updatePartyDroneStage(lobby = partyLobby) {
   const others = members.filter((member) => member.id !== signedInUser?.id).slice(0, partyDroneObjects.length);
   const [pilotX, pilotZ] = menuDronePadPositions[0];
   showDrone.position.set(pilotX, menuDroneBaseY, pilotZ);
+  showDrone.userData.pilotName = lobby?.members?.find((member) => member.id === signedInUser?.id)?.username || signedInUser?.username || '';
   partyDroneObjects.forEach((drone, index) => {
     const member = others[index];
     drone.visible = Boolean(member) && !flying && currentPage !== 'builder' && currentPage !== 'trackPicker';
@@ -9482,7 +9724,11 @@ function updatePartyDroneStage(lobby = partyLobby) {
     drone.position.set(x, menuDroneBaseY, z);
     drone.rotation.y = Math.PI + x * -0.012;
   });
-  partyDroneRoot.visible = !flying && currentPage !== 'builder' && currentPage !== 'trackPicker';
+  if (!flying) livePartyDroneObjects.forEach((drone) => { drone.visible = false; });
+  partyDroneRoot.visible = flying
+    ? Boolean(lobby && lobby.members.length > 1)
+    : currentPage !== 'builder' && currentPage !== 'trackPicker';
+  if (flying) updatePartyDroneFlightVisuals();
 }
 
 function updatePodiumInvitePositions() {
@@ -9723,6 +9969,7 @@ function schedulePartyRace(lobby) {
 }
 
 function updatePartyLobby(lobby) {
+  if (partyLobby?.code !== lobby?.code) partyFlightSnapshots.clear();
   if (lobby?.status === 'open' && lobby.results?.length && ['grid', 'race'].includes(partyRacePhase)) {
     partyRacePhase = 'lobby';
     partyRaceFinished = true;
@@ -9868,7 +10115,7 @@ function updateRaceLeaderboard() {
     place.textContent = index === 0 ? '1' : String(index + 1);
     const name = document.createElement('span');
     name.className = 'race-leaderboard-name';
-    name.textContent = member.username + (member.isLocal ? ' / YOU' : '');
+    name.textContent = member.username;
     const progress = document.createElement('small');
     progress.className = 'race-leaderboard-progress';
     progress.textContent = member.finishedAt ? 'FIN' : `${Math.min(total, member.progress)}/${total}`;
@@ -9919,10 +10166,12 @@ async function refreshPartyLobby() {
 function startPartyPolling() {
   window.clearInterval(partyPollTimer);
   window.clearInterval(gameChatPollTimer);
+  window.clearInterval(partyPositionTimer);
   void refreshPartyLobby();
   void refreshGameChat();
   partyPollTimer = window.setInterval(refreshPartyLobby, 800);
   gameChatPollTimer = window.setInterval(refreshGameChat, 2200);
+  partyPositionTimer = window.setInterval(syncPartyFlightPositions, 120);
 }
 
 async function createFlightParty() {
@@ -10309,6 +10558,7 @@ async function finishCrewRace(didNotFinish = false, raceStartAt = partyLobby?.st
       updateAccountUI();
     }
     updatePartyLobby(result.lobby);
+    if (!didNotFinish && result.lobby.gameMode !== 'relay-race') refreshRaceFinishLeaderboard();
     if (!didNotFinish) {
       setLobbyMessage(result.teamXpAwarded
         ? 'Race complete. 100 pilot XP and 100 team XP added.'
@@ -10705,7 +10955,7 @@ function setPage(page) {
   });
   if (page === 'trackPicker') requestAnimationFrame(updateTrackPickerPreview);
   navButtons.forEach((button) => button.classList.toggle('is-active', button.dataset.page === page));
-  partyDroneRoot.visible = !flying && page !== 'builder';
+  partyDroneRoot.visible = flying ? Boolean(partyLobby && partyLobby.members.length > 1) : page !== 'builder';
   updatePartyDroneStage();
   const stageLabels = {
     singleplayer: 'PILOT // SELECT A FLIGHT',
@@ -10833,9 +11083,23 @@ document.querySelector('#trackPickerDone').addEventListener('click', () => {
   enterFlight();
 });
 document.querySelector('#trackLeaderboardButton').addEventListener('click', () => {
-  if (!activeTrack) return;
-  renderSoloTrackLeaderboard();
-  document.querySelector('#trackLeaderboardDialog').showModal();
+  void openTrackLeaderboard();
+});
+document.querySelector('#trackLeaderboardPrev').addEventListener('click', () => {
+  trackLeaderboardPage = Math.max(0, trackLeaderboardPage - 1);
+  renderTrackLeaderboardPage();
+});
+document.querySelector('#trackLeaderboardNext').addEventListener('click', () => {
+  trackLeaderboardPage = Math.min(Math.ceil(trackLeaderboardRecords.length / leaderboardPageSize) - 1, trackLeaderboardPage + 1);
+  renderTrackLeaderboardPage();
+});
+document.querySelector('#raceFinishLeaderboardPrev').addEventListener('click', () => {
+  raceFinishLeaderboardPage = Math.max(0, raceFinishLeaderboardPage - 1);
+  renderRaceFinishLeaderboardPage();
+});
+document.querySelector('#raceFinishLeaderboardNext').addEventListener('click', () => {
+  raceFinishLeaderboardPage = Math.min(Math.ceil(raceFinishLeaderboardRecords.length / leaderboardPageSize) - 1, raceFinishLeaderboardPage + 1);
+  renderRaceFinishLeaderboardPage();
 });
 document.querySelector('#closeTrackLeaderboard').addEventListener('click', () => {
   document.querySelector('#trackLeaderboardDialog').close();
@@ -10921,7 +11185,14 @@ let generatedTrackLaunchPodium = null;
 let raceTimerEnabled = false;
 let raceTimerStartedAt = 0;
 let raceTimerFinishedAt = 0;
-let soloRaceLeaderboardTimeout = 0;
+let raceFinishLeaderboardTimeout = 0;
+let raceFinishLeaderboardSession = 0;
+let raceFinishLeaderboardRecords = [];
+let raceFinishCurrentRecord = null;
+let raceFinishLeaderboardPage = 0;
+let trackLeaderboardRecords = [];
+let trackLeaderboardPage = 0;
+const leaderboardPageSize = 10;
 const flight = {
   position: new THREE.Vector3(0, 5, 20),
   velocity: new THREE.Vector3(),
@@ -10956,6 +11227,7 @@ const axisY = new THREE.Vector3(0, 1, 0);
 const axisZ = new THREE.Vector3(0, 0, 1);
 const camOffset = new THREE.Vector3(0, 0.08, 0);
 const flightPropwashForce = new THREE.Vector3();
+const flightDamageTorque = new THREE.Vector3();
 
 function resetFlightControllerState() {
   flight.impactAngularVelocity.set(0, 0, 0);
@@ -10970,6 +11242,276 @@ function resetFlightControllerState() {
   flight.motorAngularAcceleration.set(0, 0, 0);
   flight.motorOutput = 0;
   flight.propwashPhase = 0;
+}
+
+function makeFlightDamageTexture(kind) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  const gradient = context.createRadialGradient(64, 64, 2, 64, 64, 62);
+  if (kind === 'fire') {
+    gradient.addColorStop(0, 'rgba(255, 250, 193, 1)');
+    gradient.addColorStop(0.18, 'rgba(255, 207, 70, 0.96)');
+    gradient.addColorStop(0.46, 'rgba(255, 91, 25, 0.7)');
+    gradient.addColorStop(1, 'rgba(146, 22, 10, 0)');
+  } else {
+    gradient.addColorStop(0, 'rgba(27, 31, 36, 0.82)');
+    gradient.addColorStop(0.36, 'rgba(55, 60, 66, 0.58)');
+    gradient.addColorStop(0.72, 'rgba(77, 81, 87, 0.24)');
+    gradient.addColorStop(1, 'rgba(84, 86, 89, 0)');
+  }
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function addDetachedPropVisual(root) {
+  const prop = new THREE.Group();
+  const bladeGeometry = new THREE.BoxGeometry(0.84, 0.04, 0.11);
+  const bladeA = new THREE.Mesh(bladeGeometry, dronePropColorMaterial);
+  const bladeB = new THREE.Mesh(bladeGeometry, dronePropColorMaterial);
+  bladeB.rotation.y = Math.PI / 2;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 0.18, 12), flightDamageArmMaterial);
+  prop.add(bladeA, bladeB, hub);
+  root.add(prop);
+  return prop;
+}
+
+function spawnDetachedDronePart(motorIndex, part, impactNormal = null, includePropeller = true) {
+  const [x, z] = flightCollisionMotorOffsets[motorIndex];
+  const localMotorPosition = new THREE.Vector3(x * 0.76, 0, z * 0.76);
+  const debris = new THREE.Group();
+  debris.name = part === 'arm' ? 'Broken drone arm and propeller' : 'Broken drone propeller';
+  debris.quaternion.copy(flight.orientation);
+  debris.position.copy(flight.position).add(localMotorPosition.clone().applyQuaternion(flight.orientation));
+  if (part === 'arm') {
+    const armLength = localMotorPosition.length();
+    const armDirection = localMotorPosition.clone().negate().normalize();
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, armLength, 8), flightDamageArmMaterial);
+    arm.position.copy(armDirection).multiplyScalar(armLength * 0.5);
+    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), armDirection);
+    const neon = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, armLength * 0.76, 6), droneArmGlowMaterial);
+    neon.position.copy(armDirection).multiplyScalar(armLength * 0.52);
+    neon.position.y += 0.065;
+    neon.quaternion.copy(arm.quaternion);
+    debris.add(arm, neon);
+  }
+  if (includePropeller) {
+    const prop = addDetachedPropVisual(debris);
+    prop.position.set(0, 0.1, 0);
+  }
+  flightDebrisRoot.add(debris);
+
+  const outward = localMotorPosition.normalize().applyQuaternion(flight.orientation);
+  if (impactNormal) outward.addScaledVector(impactNormal, 0.3).normalize();
+  const velocity = flight.velocity.clone().addScaledVector(outward, 2.2 + Math.random() * 2.2);
+  velocity.y += 1.4 + Math.random() * 2;
+  flightDebris.push({
+    object: debris,
+    velocity,
+    rotationSpeed: new THREE.Vector3(
+      (Math.random() - 0.5) * 12,
+      (Math.random() - 0.5) * 15,
+      (Math.random() - 0.5) * 12,
+    ),
+    age: 0,
+    life: 12 + Math.random() * 4,
+  });
+}
+
+function spawnDroneBodyDebris() {
+  const chunk = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.28, 0.62), flightDamageBodyMaterial);
+  chunk.name = 'Broken drone center frame';
+  chunk.position.copy(flight.position);
+  chunk.quaternion.copy(flight.orientation);
+  flightDebrisRoot.add(chunk);
+  flightDebris.push({
+    object: chunk,
+    velocity: flight.velocity.clone().add(new THREE.Vector3((Math.random() - 0.5) * 4, 2 + Math.random() * 3, (Math.random() - 0.5) * 4)),
+    rotationSpeed: new THREE.Vector3((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 11, (Math.random() - 0.5) * 9),
+    age: 0,
+    life: 12,
+  });
+}
+
+function breakFlightPropeller(motorIndex, impactNormal) {
+  if (motorIndex < 0 || flightDamageState.brokenProps[motorIndex]) return;
+  flightDamageState.brokenProps[motorIndex] = true;
+  spawnDetachedDronePart(motorIndex, 'prop', impactNormal);
+  showToast('Propeller snapped off. Flight control is damaged.');
+}
+
+function breakFlightArm(motorIndex, impactNormal) {
+  if (motorIndex < 0 || flightDamageState.brokenArms[motorIndex]) return;
+  const propellerStillAttached = !flightDamageState.brokenProps[motorIndex];
+  flightDamageState.brokenArms[motorIndex] = true;
+  flightDamageState.brokenProps[motorIndex] = true;
+  spawnDetachedDronePart(motorIndex, 'arm', impactNormal, propellerStillAttached);
+  showToast('Drone arm broke off. Flight control is severely damaged.');
+}
+
+function spawnFlightDamageParticle(kind) {
+  const texture = kind === 'fire'
+    ? (flightFireTexture ||= makeFlightDamageTexture('fire'))
+    : (flightSmokeTexture ||= makeFlightDamageTexture('smoke'));
+  if (!texture) return;
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(flight.orientation).normalize();
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(flight.orientation).normalize();
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    color: kind === 'fire' ? 0xffb944 : 0xd0d5d9,
+    transparent: true,
+    opacity: kind === 'fire' ? 0.9 : 0.64,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    blending: kind === 'fire' ? THREE.AdditiveBlending : THREE.NormalBlending,
+  }));
+  const baseScale = kind === 'fire' ? 0.45 + Math.random() * 0.42 : 0.72 + Math.random() * 0.6;
+  sprite.position.copy(flight.position)
+    .addScaledVector(forward, 3 + Math.random() * 1.2)
+    .addScaledVector(right, (Math.random() - 0.5) * 2.2)
+    .add(new THREE.Vector3(0, 0.15 + Math.random() * 0.9, 0));
+  sprite.scale.setScalar(baseScale);
+  sprite.renderOrder = 24;
+  flightDamageEffectsRoot.add(sprite);
+  flightDamageParticles.push({
+    sprite,
+    kind,
+    velocity: new THREE.Vector3((Math.random() - 0.5) * 0.75, kind === 'fire' ? 1.6 : 0.7, (Math.random() - 0.5) * 0.75),
+    age: 0,
+    life: kind === 'fire' ? 0.55 + Math.random() * 0.45 : 2.1 + Math.random() * 1.4,
+    baseScale,
+    baseOpacity: kind === 'fire' ? 0.9 : 0.64,
+  });
+  if (flightDamageParticles.length > 140) {
+    const oldest = flightDamageParticles.shift();
+    oldest.sprite.parent?.remove(oldest.sprite);
+    oldest.sprite.material.dispose();
+  }
+}
+
+function beginFlightFireCrash() {
+  if (flightDamageState.crashed) return;
+  flightDamageState.burning = true;
+  flightDamageState.crashed = true;
+  flight.throttle = 0;
+  flight.motorOutput = 0;
+  flight.impactAngularVelocity.add(new THREE.Vector3(
+    (Math.random() - 0.5) * 7,
+    (Math.random() - 0.5) * 6,
+    (Math.random() - 0.5) * 7,
+  ));
+  flightCollisionMotorOffsets.forEach((_, motorIndex) => {
+    if (!flightDamageState.brokenArms[motorIndex]) breakFlightArm(motorIndex);
+    else if (!flightDamageState.brokenProps[motorIndex]) breakFlightPropeller(motorIndex);
+  });
+  spawnDroneBodyDebris();
+  for (let index = 0; index < 12; index += 1) spawnFlightDamageParticle('fire');
+  for (let index = 0; index < 8; index += 1) spawnFlightDamageParticle('smoke');
+  showToast('CRITICAL DAMAGE. Motors shut down; drone is falling apart.');
+}
+
+function applyFlightImpactDamage(impact) {
+  if (!impact || impact.speed < flightDamageMinimumImpactSpeed || flightDamageState.crashed) return;
+  const now = performance.now();
+  if (now - flightDamageState.lastImpactAt < 220) return;
+  flightDamageState.lastImpactAt = now;
+  flightDamageState.damage = Math.min(100, flightDamageState.damage + THREE.MathUtils.clamp((impact.speed - flightDamageMinimumImpactSpeed) * 4.6 + 3, 3, 42));
+
+  if (impact.part === 'prop' && impact.speed >= flightPropellerBreakImpactSpeed && impact.motorIndex >= 0) {
+    breakFlightPropeller(impact.motorIndex, impact.normal);
+  }
+  if ((impact.part === 'arm' || impact.part === 'prop') && impact.speed >= flightArmBreakImpactSpeed && impact.motorIndex >= 0) {
+    breakFlightArm(impact.motorIndex, impact.normal);
+  }
+  if (impact.speed >= flightFireCrashImpactSpeed || flightDamageState.damage >= 100) {
+    beginFlightFireCrash();
+  } else if (flightDamageState.damage >= flightSmokeDamageThreshold && !flightDamageState.burning) {
+    showToast('Drone critically damaged. Smoke is coming from the frame.');
+  }
+}
+
+function updateFlightDamageEffects(dt) {
+  if (flightDamageState.damage >= flightSmokeDamageThreshold || flightDamageState.burning) {
+    flightDamageState.smokeSpawnTime += dt;
+    while (flightDamageState.smokeSpawnTime >= 0.18) {
+      flightDamageState.smokeSpawnTime -= 0.18;
+      spawnFlightDamageParticle('smoke');
+    }
+  }
+  if (flightDamageState.burning) {
+    flightDamageState.fireSpawnTime += dt;
+    while (flightDamageState.fireSpawnTime >= 0.07) {
+      flightDamageState.fireSpawnTime -= 0.07;
+      spawnFlightDamageParticle('fire');
+    }
+  }
+
+  for (let index = flightDamageParticles.length - 1; index >= 0; index -= 1) {
+    const particle = flightDamageParticles[index];
+    particle.age += dt;
+    if (particle.age >= particle.life) {
+      particle.sprite.parent?.remove(particle.sprite);
+      particle.sprite.material.dispose();
+      flightDamageParticles.splice(index, 1);
+      continue;
+    }
+    const progress = particle.age / particle.life;
+    particle.sprite.position.addScaledVector(particle.velocity, dt);
+    particle.velocity.y += (particle.kind === 'fire' ? 0.25 : 0.12) * dt;
+    particle.sprite.material.opacity = particle.baseOpacity * (1 - progress) * (particle.kind === 'fire' ? 1 : 0.84);
+    particle.sprite.scale.setScalar(particle.baseScale * (particle.kind === 'smoke' ? 1 + progress * 1.6 : 1 - progress * 0.36));
+  }
+
+  for (let index = flightDebris.length - 1; index >= 0; index -= 1) {
+    const piece = flightDebris[index];
+    piece.age += dt;
+    if (piece.age >= piece.life) {
+      piece.object.traverse((object) => object.geometry?.dispose());
+      piece.object.parent?.remove(piece.object);
+      flightDebris.splice(index, 1);
+      continue;
+    }
+    piece.velocity.y -= 9.81 * dt;
+    piece.object.position.addScaledVector(piece.velocity, dt);
+    piece.object.rotation.x += piece.rotationSpeed.x * dt;
+    piece.object.rotation.y += piece.rotationSpeed.y * dt;
+    piece.object.rotation.z += piece.rotationSpeed.z * dt;
+  }
+}
+
+function clearFlightDamageVisuals() {
+  flightDamageParticles.forEach(({ sprite }) => {
+    sprite.material.dispose();
+    sprite.parent?.remove(sprite);
+  });
+  flightDamageParticles.length = 0;
+  flightDebris.forEach(({ object }) => {
+    object.traverse((child) => child.geometry?.dispose());
+    object.parent?.remove(object);
+  });
+  flightDebris.length = 0;
+}
+
+function resetFlightDamage() {
+  clearFlightDamageVisuals();
+  flightDamageState.damage = 0;
+  flightDamageState.brokenProps.fill(false);
+  flightDamageState.brokenArms.fill(false);
+  flightDamageState.burning = false;
+  flightDamageState.crashed = false;
+  flightDamageState.lastImpactAt = 0;
+  flightDamageState.smokeSpawnTime = 0;
+  flightDamageState.fireSpawnTime = 0;
+}
+
+function flightAvailableMotorRatio() {
+  return flightDamageState.brokenProps.reduce((available, broken) => available + (broken ? 0 : 1), 0) / 4;
 }
 
 const builderGateFlightCenterY = 2.1;
@@ -10990,7 +11532,10 @@ function updateCourseProgress(nextIndex, complete = false) {
   if (complete && raceTimerEnabled) {
     raceTimerFinishedAt = performance.now();
     updateRaceTimerDisplay(raceTimerFinishedAt);
-    showSoloRaceLeaderboard();
+    showRaceFinishLeaderboard({
+      timeMs: Math.max(0, raceTimerFinishedAt - raceTimerStartedAt),
+      mode: isMultiplayerRaceActive() ? 'MULTIPLAYER' : 'SOLO',
+    });
   }
   updateRaceLeaderboard();
 }
@@ -11009,9 +11554,9 @@ function formatSoloRaceTime(timeMs) {
 
 function saveSoloTrackRaceTime(timeMs) {
   const key = soloTrackLeaderboardKey();
-  if (builderTestCourse || !key || !Number.isFinite(timeMs) || timeMs <= 0) return null;
+  if (!signedInUser || builderTestCourse || !key || !Number.isFinite(timeMs) || timeMs <= 0) return null;
   const run = {
-    username: signedInUser?.username || 'YOU',
+    username: signedInUser.username,
     timeMs: Math.round(timeMs),
     completedAt: Date.now(),
   };
@@ -11019,70 +11564,178 @@ function saveSoloTrackRaceTime(timeMs) {
     .sort((a, b) => a.timeMs - b.timeMs || a.completedAt - b.completedAt);
   const place = ranked.indexOf(run) + 1;
   soloTrackLeaderboardData[key] = ranked.slice(0, 10);
+  let persisted = true;
   try { localStorage.setItem(soloTrackLeaderboardStorageKey, JSON.stringify(soloTrackLeaderboardData)); }
-  catch { /* Keep this session's times available if browser storage is unavailable. */ }
-  return { place };
+  catch { persisted = false; }
+  return { place, persisted };
 }
 
-function renderSoloTrackLeaderboard() {
-  const trackName = document.querySelector('#trackLeaderboardTrackName');
-  const rows = document.querySelector('#trackLeaderboardRows');
-  const emptyMessage = document.querySelector('#trackLeaderboardEmpty');
-  const track = activeTrack;
-  if (!trackName || !rows || !emptyMessage || !track) return;
-  trackName.textContent = track.name || 'Selected track';
+function localTrackLeaderboardRecords(track = activeTrack) {
+  if (!signedInUser) return [];
   const runs = soloTrackLeaderboardData[soloTrackLeaderboardKey(track)] || [];
+  return runs.map((run) => ({
+    username: run.username,
+    userId: signedInUser.id,
+    timeMs: run.timeMs,
+    isLocal: true,
+  }));
+}
+
+function mergeTrackLeaderboardRecords(...groups) {
+  const byPilot = new Map();
+  groups.flat().forEach((record) => {
+    if (!record || typeof record.username !== 'string' || !Number.isFinite(Number(record.timeMs)) || Number(record.timeMs) <= 0) return;
+    const key = record.userId || (record.isLocal && signedInUser?.id)
+      || record.username.trim().toLocaleLowerCase();
+    if (!key) return;
+    const previous = byPilot.get(key);
+    const next = { username: record.username.trim(), timeMs: Math.round(Number(record.timeMs)), isLocal: Boolean(record.isLocal) };
+    if (!previous || next.timeMs < previous.timeMs) byPilot.set(key, { ...next, isLocal: next.isLocal || Boolean(previous?.isLocal) });
+    else if (next.isLocal && !previous.isLocal) byPilot.set(key, { ...previous, isLocal: true });
+  });
+  return [...byPilot.values()].sort((a, b) => a.timeMs - b.timeMs || a.username.localeCompare(b.username));
+}
+
+async function requestTrackLeaderboard(track, submitTimeMs = null) {
+  if (!track?.id) return [];
+  const biomeId = track.biomeId || track.environmentId || activeBiome;
+  const query = new URLSearchParams({ biomeId, trackId: track.id });
+  const options = Number.isFinite(submitTimeMs) && signedInUser
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ biomeId, trackId: track.id, timeMs: Math.round(submitTimeMs) }), credentials: 'same-origin' }
+    : { method: 'GET', credentials: 'same-origin' };
+  const response = await fetch(options.method === 'POST' ? '/api/track-leaderboard' : `/api/track-leaderboard?${query}`, options);
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Track leaderboard is unavailable.');
+  return Array.isArray(result.records) ? result.records : [];
+}
+
+function renderLeaderboardPage({ records, page, rowsId, emptyId, pagerId, pageId, prevId, nextId }) {
+  const rows = document.querySelector(rowsId);
+  const empty = document.querySelector(emptyId);
+  const pager = document.querySelector(pagerId);
+  if (!rows || !empty || !pager) return;
+  const pageCount = Math.max(1, Math.ceil(records.length / leaderboardPageSize));
+  const safePage = Math.max(0, Math.min(page, pageCount - 1));
   rows.replaceChildren();
-  emptyMessage.hidden = runs.length > 0;
-  runs.forEach((run, index) => {
+  const firstIndex = safePage * leaderboardPageSize;
+  records.slice(firstIndex, firstIndex + leaderboardPageSize).forEach((record, index) => {
     const row = document.createElement('li');
-    row.className = 'race-leaderboard-row is-local';
+    row.className = `race-leaderboard-row${firstIndex + index === 0 ? ' is-leading' : ''}${record.isLocal ? ' is-local' : ''}`;
     const place = document.createElement('b');
     place.className = 'race-leaderboard-place';
-    place.textContent = String(index + 1);
+    place.textContent = String(firstIndex + index + 1);
     const name = document.createElement('span');
     name.className = 'race-leaderboard-name';
-    name.textContent = run.username === 'YOU' ? 'YOU' : `YOU / ${run.username}`;
+    name.textContent = record.username || 'Pilot';
     const time = document.createElement('small');
     time.className = 'race-leaderboard-progress';
-    time.textContent = formatSoloRaceTime(run.timeMs);
+    time.textContent = formatSoloRaceTime(record.timeMs);
     row.append(place, name, time);
     rows.append(row);
   });
+  empty.hidden = records.length > 0;
+  pager.hidden = pageCount <= 1;
+  document.querySelector(pageId).textContent = `PAGE ${safePage + 1} / ${pageCount}`;
+  document.querySelector(prevId).disabled = safePage === 0;
+  document.querySelector(nextId).disabled = safePage >= pageCount - 1;
 }
 
-function hideSoloRaceLeaderboard() {
-  if (soloRaceLeaderboardTimeout) window.clearTimeout(soloRaceLeaderboardTimeout);
-  soloRaceLeaderboardTimeout = 0;
-  const panel = document.querySelector('#soloRaceLeaderboard');
+function renderTrackLeaderboardPage() {
+  trackLeaderboardPage = Math.max(0, Math.min(trackLeaderboardPage, Math.ceil(trackLeaderboardRecords.length / leaderboardPageSize) - 1));
+  renderLeaderboardPage({
+    records: trackLeaderboardRecords,
+    page: trackLeaderboardPage,
+    rowsId: '#trackLeaderboardRows',
+    emptyId: '#trackLeaderboardEmpty',
+    pagerId: '#trackLeaderboardPager',
+    pageId: '#trackLeaderboardPage',
+    prevId: '#trackLeaderboardPrev',
+    nextId: '#trackLeaderboardNext',
+  });
+}
+
+function renderRaceFinishLeaderboardPage() {
+  raceFinishLeaderboardPage = Math.max(0, Math.min(raceFinishLeaderboardPage, Math.ceil(raceFinishLeaderboardRecords.length / leaderboardPageSize) - 1));
+  renderLeaderboardPage({
+    records: raceFinishLeaderboardRecords,
+    page: raceFinishLeaderboardPage,
+    rowsId: '#raceFinishLeaderboardRows',
+    emptyId: '#raceFinishLeaderboardEmpty',
+    pagerId: '#raceFinishLeaderboardPager',
+    pageId: '#raceFinishLeaderboardPage',
+    prevId: '#raceFinishLeaderboardPrev',
+    nextId: '#raceFinishLeaderboardNext',
+  });
+}
+
+async function openTrackLeaderboard() {
+  const track = activeTrack;
+  if (!track) return;
+  document.querySelector('#trackLeaderboardTrackName').textContent = track.name || 'Selected track';
+  trackLeaderboardPage = 0;
+  trackLeaderboardRecords = mergeTrackLeaderboardRecords(localTrackLeaderboardRecords(track));
+  renderTrackLeaderboardPage();
+  const dialog = document.querySelector('#trackLeaderboardDialog');
+  if (!dialog.open) dialog.showModal();
+  try {
+    const records = await requestTrackLeaderboard(track);
+    if (activeTrack?.id !== track.id || !dialog.open) return;
+    trackLeaderboardRecords = mergeTrackLeaderboardRecords(records, localTrackLeaderboardRecords(track));
+    trackLeaderboardPage = 0;
+    renderTrackLeaderboardPage();
+  } catch { /* Keep this device's records available if the online service is offline. */ }
+}
+
+function hideRaceFinishLeaderboard() {
+  if (raceFinishLeaderboardTimeout) window.clearTimeout(raceFinishLeaderboardTimeout);
+  raceFinishLeaderboardTimeout = 0;
+  raceFinishLeaderboardSession += 1;
+  const panel = document.querySelector('#raceFinishLeaderboard');
   if (panel) panel.hidden = true;
 }
 
-function showSoloRaceLeaderboard() {
-  if (!raceTimerEnabled || !raceTimerStartedAt || isMultiplayerRaceActive()) return;
-  const panel = document.querySelector('#soloRaceLeaderboard');
-  const rows = document.querySelector('#soloRaceLeaderboardRows');
-  if (!panel || !rows) return;
-  const elapsed = Math.max(0, raceTimerFinishedAt - raceTimerStartedAt);
-  const resultTime = formatSoloRaceTime(elapsed);
-  const savedResult = saveSoloTrackRaceTime(elapsed);
-  const row = document.createElement('li');
-  row.className = 'race-leaderboard-row is-leading is-local';
-  const place = document.createElement('b');
-  place.className = 'race-leaderboard-place';
-  place.textContent = String(savedResult?.place || 1);
-  const name = document.createElement('span');
-  name.className = 'race-leaderboard-name';
-  name.textContent = signedInUser?.username ? `YOU / ${signedInUser.username}` : 'YOU';
-  const time = document.createElement('small');
-  time.className = 'race-leaderboard-progress';
-  time.textContent = resultTime;
-  row.append(place, name, time);
-  rows.replaceChildren(row);
-  panel.setAttribute('aria-label', `Solo race result: you finished in ${resultTime}`);
+function refreshRaceFinishLeaderboard() {
+  const panel = document.querySelector('#raceFinishLeaderboard');
+  const track = activeTrack;
+  const session = raceFinishLeaderboardSession;
+  if (!panel || panel.hidden || !track?.id) return;
+  void requestTrackLeaderboard(track).then((records) => {
+    if (session !== raceFinishLeaderboardSession || panel.hidden) return;
+    raceFinishLeaderboardRecords = mergeTrackLeaderboardRecords(records, localTrackLeaderboardRecords(track), raceFinishCurrentRecord ? [raceFinishCurrentRecord] : []);
+    renderRaceFinishLeaderboardPage();
+  }).catch(() => {});
+}
+
+function showRaceFinishLeaderboard({ timeMs, mode }) {
+  if (!raceTimerEnabled || !raceTimerStartedAt || !Number.isFinite(timeMs) || timeMs <= 0) return;
+  const panel = document.querySelector('#raceFinishLeaderboard');
+  if (!panel) return;
+  if (raceFinishLeaderboardTimeout) window.clearTimeout(raceFinishLeaderboardTimeout);
+  raceFinishLeaderboardSession += 1;
+  const session = raceFinishLeaderboardSession;
+  raceFinishLeaderboardPage = 0;
+  const track = activeTrack;
+  const trackName = track?.name || activeFlightCourseName || 'Selected track';
+  document.querySelector('#raceFinishLeaderboardHeading').textContent = `${mode} LEADERBOARD`;
+  document.querySelector('#raceFinishLeaderboardTrack').textContent = trackName;
+  raceFinishCurrentRecord = signedInUser ? {
+    username: signedInUser.username,
+    userId: signedInUser.id,
+    timeMs: Math.round(timeMs),
+    isLocal: true,
+  } : null;
+  if (mode === 'SOLO') saveSoloTrackRaceTime(timeMs);
+  const localRecords = localTrackLeaderboardRecords(track);
+  raceFinishLeaderboardRecords = mergeTrackLeaderboardRecords(localRecords, [raceFinishCurrentRecord]);
   panel.hidden = false;
-  if (soloRaceLeaderboardTimeout) window.clearTimeout(soloRaceLeaderboardTimeout);
-  soloRaceLeaderboardTimeout = window.setTimeout(hideSoloRaceLeaderboard, 5000);
+  renderRaceFinishLeaderboardPage();
+  raceFinishLeaderboardTimeout = window.setTimeout(hideRaceFinishLeaderboard, 5000);
+  if (!track?.id) return;
+  void requestTrackLeaderboard(track, mode === 'SOLO' ? timeMs : null).then((records) => {
+    if (session !== raceFinishLeaderboardSession || panel.hidden) return;
+    raceFinishLeaderboardRecords = mergeTrackLeaderboardRecords(records, localRecords, [raceFinishCurrentRecord]);
+    renderRaceFinishLeaderboardPage();
+  }).catch(() => {});
 }
 
 function isMultiplayerRaceActive() {
@@ -11211,6 +11864,16 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
   const podiums = userPodiumObjects.filter((object) =>
     object.userData.propType === 'podium' || object.userData.propType === 'relay-podium-gate')
     .sort((a, b) => Number(b.userData.isLaunchPodium) - Number(a.userData.isLaunchPodium));
+  const podiumUsernames = partyLobby?.gameMode === 'relay-race'
+    ? Array.from({ length: RELAY_STATION_COUNT }, (_, station) => partyLobby.members
+      .filter((member) => Number(member.relayStation) === station)
+      .map((member) => member.username)
+      .filter(Boolean)
+      .join(' / '))
+    : partyLobby?.members?.length
+      ? partyLobby.members.map((member) => member.username || '')
+      : [signedInUser?.username || ''];
+  podiums.forEach((candidate, index) => setRacePodiumUsername(candidate, podiumUsernames[index] || ''));
   let podium = podiums[gridSlot] || null;
   let center;
   let yaw;
@@ -11222,6 +11885,7 @@ function setupRaceLaunchPodium(startEntry, parent, userPodiumObjects = [], gridS
     const platform = new THREE.Group();
     platform.name = 'Automatic race launch podium';
     platform.add(createBuilderPropModel('podium'));
+    setRacePodiumUsername(platform, signedInUser?.username || '');
     let offsetBase;
     if (podiums.length) {
       offsetBase = podiums[0];
@@ -11421,7 +12085,8 @@ function prepareFlightCourse() {
 function restartLocalRace(source = 'keyboard') {
   if (!flying || !raceTimerEnabled || !launchPadState || !flightCourseEntries.length || isMultiplayerRaceActive()) return false;
 
-  hideSoloRaceLeaderboard();
+  resetFlightDamage();
+  hideRaceFinishLeaderboard();
   flightCourseEntries.forEach((entry) => {
     entry.passed = false;
     if (entry.indicator) entry.indicator.visible = false;
@@ -11447,18 +12112,24 @@ function restartLocalRace(source = 'keyboard') {
   return true;
 }
 
-function resetDrone(source = 'controller') {
+function resetDrone() {
   if (!flying) return false;
-  flight.position.copy(flightSpawnPosition);
+  resetFlightDamage();
+  const levelForward = new THREE.Vector3(0, 0, 1).applyQuaternion(flight.orientation);
+  levelForward.y = 0;
+  if (levelForward.lengthSq() < 0.0001) {
+    levelForward.set(0, 0, 1).applyQuaternion(flightSpawnOrientation);
+    levelForward.y = 0;
+  }
+  const heading = levelForward.lengthSq() > 0.0001 ? Math.atan2(levelForward.x, levelForward.z) : 0;
   flight.velocity.set(0, 0, 0);
   flight.acceleration.set(0, 0, 0);
   resetFlightControllerState();
-  flight.orientation.copy(flightSpawnOrientation);
-  flight.throttle = raceTimerEnabled ? 0 : 0.54;
+  flight.orientation.setFromAxisAngle(axisY, heading);
+  flight.throttle = 0.54;
   flight.speed = 0;
   previousFlightPosition.copy(flight.position);
-  if (launchPadState) launchPadState.started = false;
-  showToast(source === 'controller' ? 'Drone reset to its starting position.' : 'Drone reset.');
+  showToast('Drone reset in place.');
   return true;
 }
 
@@ -12339,7 +13010,8 @@ async function enterFlight() {
     const built = safeApplyBiome(activeBiome, false);
     if (!built || built.id !== activeBiome) return;
   }
-  hideSoloRaceLeaderboard();
+  resetFlightDamage();
+  hideRaceFinishLeaderboard();
   unlockGateAudio();
   if (currentPage === 'builder') setBuilderSettingsOpen(false);
   flying = true;
@@ -12349,7 +13021,7 @@ async function enterFlight() {
   syncGateBadgeVisibility();
   syncWorldMode();
   menuCityRoot.visible = false;
-  partyDroneRoot.visible = false;
+  partyDroneRoot.visible = Boolean(partyLobby && partyLobby.members.length > 1);
   root.classList.remove('is-building');
   builderSelectionHelper.visible = false;
   root.classList.add('is-flying');
@@ -12362,6 +13034,7 @@ async function enterFlight() {
   showDrone.visible = false;
   fieldSpot.visible = false;
   prepareFlightCourse();
+  refreshFlightRaceLine();
   flight.position.set(0, 5, 20);
   flight.velocity.set(0, 0, 0);
   resetFlightControllerState();
@@ -12396,7 +13069,7 @@ async function enterFlight() {
 
 function exitFlight() {
   if (!flying) return;
-  hideSoloRaceLeaderboard();
+  hideRaceFinishLeaderboard();
   const leaveWaitingLobby = partyRacePhase === 'waiting' && partyLobby?.status === 'open';
   if (leaveWaitingLobby) {
     partyRaceFinished = true;
@@ -12405,6 +13078,8 @@ function exitFlight() {
     void finishCrewRace(true);
   }
   flying = false;
+  clearFlightRaceLine();
+  resetFlightDamage();
   updateGameChatUI();
   updateFlightMainMenuButton();
   syncBuilderTransformToolbar();
@@ -12441,7 +13116,7 @@ function exitFlight() {
   else if (currentPage === 'trackPicker') setTrackOverviewCamera();
   else resetMenuCamera();
   camera.fov = currentPage === 'builder'
-    ? (Number(document.querySelector('#fovRange').value) || 108)
+    ? (Number(document.querySelector('#fovRange').value) || 90)
     : currentPage === 'trackPicker' ? 54 : 48;
   camera.updateProjectionMatrix();
   updateMotorAudio({ pitch: 0, roll: 0 });
@@ -12642,6 +13317,66 @@ function clearRaceLineGroup(group) {
     if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
     else object.material?.dispose();
   }
+}
+
+function clearFlightRaceLine() {
+  clearRaceLineGroup(flightRaceLineRoot);
+  flightRaceLineRoot.visible = false;
+}
+
+function addFlightRaceLinePath(points, radius, color, opacity) {
+  if (points.length < 2) return;
+  const curve = points.length > 2
+    ? new THREE.CatmullRomCurve3(points, false, 'centripetal')
+    : new THREE.LineCurve3(points[0], points[1]);
+  const length = curve.getLength();
+  if (length < 0.05) return;
+  const geometry = new THREE.TubeGeometry(curve, THREE.MathUtils.clamp(Math.ceil(length / 1.35), 12, 960), radius, 7, false);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 12;
+  mesh.userData.skipFlightCollision = true;
+  flightRaceLineRoot.add(mesh);
+}
+
+function refreshFlightRaceLine() {
+  clearFlightRaceLine();
+  let points = [];
+  if (currentPage === 'builder') {
+    if (builderTestCourse && builderRaceLineGenerated) points = builderRaceLinePoints.map((point) => point.clone());
+  } else if (Array.isArray(activeTrack?.raceLine)) {
+    points = activeTrack.raceLine.slice(0, 240).flatMap((point) => {
+      if (!Array.isArray(point) || point.length !== 3 || point.some((value) => !Number.isFinite(Number(value)))) return [];
+      return [new THREE.Vector3(Number(point[0]), Number(point[1]), Number(point[2]))];
+    });
+  }
+  if (points.length < 3 || points.length % 3 !== 0) return;
+
+  if (launchPadState?.position) {
+    const launch = launchPadState.position.clone();
+    const first = points[0];
+    const rise = Math.max(1.5, Math.min(4, launch.distanceTo(first) * 0.06));
+    const curvePoint = launch.clone().lerp(first, 0.38).add(new THREE.Vector3(0, rise, 0));
+    addFlightRaceLinePath([launch, curvePoint, first], 0.22, 0x39ffd0, 0.2);
+  }
+  for (let gateIndex = 0; gateIndex < points.length / 3; gateIndex += 1) {
+    const pointIndex = gateIndex * 3;
+    addFlightRaceLinePath(points.slice(pointIndex, pointIndex + 3), 0.2, 0x39ffd0, 0.2);
+    addFlightRaceLinePath(points.slice(pointIndex + 2, pointIndex + 4), 0.2, 0x39ffd0, 0.2);
+    addFlightRaceLinePath(points.slice(pointIndex, pointIndex + 3), 0.075, 0xb5fff0, 0.68);
+    addFlightRaceLinePath(points.slice(pointIndex + 2, pointIndex + 4), 0.075, 0xb5fff0, 0.68);
+  }
+  addFlightRaceLinePath([points[points.length - 1], points[0]], 0.2, 0x39ffd0, 0.2);
+  addFlightRaceLinePath([points[points.length - 1], points[0]], 0.075, 0xb5fff0, 0.68);
+  flightRaceLineRoot.visible = flying && raceLineEnabled
+    && (selectedMode === 'Race' || isMultiplayerRaceActive() || builderTestCourse);
 }
 
 function clearBuilderRaceLine() {
@@ -13290,6 +14025,7 @@ function selectEnvironmentBuilding(id) {
 function disposeBuilderVisual(root) {
   const sharedMaterialSet = new Set(Object.values(sharedMaterials));
   root.traverse((node) => {
+    if (node.userData.isPodiumNameplateText) node.userData.podiumUsernameTexture?.dispose();
     if (node.userData.isGateModelStatusSign) {
       node.material.map?.dispose();
       node.material.dispose();
@@ -14352,6 +15088,7 @@ document.querySelector('#publishCommunityTrack').addEventListener('click', async
         gateScalesY: uploadGates.map((slot) => slot.scaleY || slot.scale || 1),
         gateScalesZ: uploadGates.map((slot) => slot.scaleZ || slot.scale || 1),
         objects: builderProps.map(({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium }) => ({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium })),
+        raceLine: builderRaceLineGenerated ? builderRaceLinePoints.map((point) => point.toArray()) : null,
         imageDataUrl: builderTrackPicture,
       }),
     });
@@ -14551,7 +15288,7 @@ const dronePropColorValue = document.querySelector('#dronePropColorValue');
 const soundToggle = document.querySelector('#soundToggle');
 const audioVolumeRange = document.querySelector('#audioVolumeRange');
 const audioVolumeValue = document.querySelector('#audioVolumeValue');
-fovRange.value = String(storedSettings.fov || 108);
+fovRange.value = String(storedSettings.fov || 90);
 angleRange.value = String(cameraAngle);
 flightFovRange.value = fovRange.value;
 flightAngleRange.value = angleRange.value;
@@ -14570,7 +15307,7 @@ flightFovValue.textContent = `${fovRange.value}°`;
 flightAngleValue.textContent = `${angleRange.value}°`;
 
 function setCameraFov(value) {
-  const fov = THREE.MathUtils.clamp(Number(value) || 108, 85, 130);
+  const fov = THREE.MathUtils.clamp(Number(value) || 90, 85, 130);
   fovRange.value = String(fov);
   flightFovRange.value = String(fov);
   document.querySelector('#fovValue').textContent = `${fov}°`;
@@ -14580,7 +15317,7 @@ function setCameraFov(value) {
 }
 
 function setCameraAngle(value) {
-  cameraAngle = THREE.MathUtils.clamp(Number(value) || 22, 5, 60);
+  cameraAngle = THREE.MathUtils.clamp(Number(value) || 45, 5, 60);
   angleRange.value = String(cameraAngle);
   flightAngleRange.value = String(cameraAngle);
   document.querySelector('#angleValue').textContent = `${cameraAngle}°`;
@@ -14588,7 +15325,8 @@ function setCameraAngle(value) {
 }
 
 function updateRenderResolution() {
-  const pixelRatio = Math.min((window.devicePixelRatio || 1) * quality, 2.4);
+  const pixelRatioLimit = quality > 1.8 ? 2.8 : 2.4;
+  const pixelRatio = Math.min((window.devicePixelRatio || 1) * quality, pixelRatioLimit);
   renderer.setPixelRatio(pixelRatio);
   composer.setPixelRatio(pixelRatio);
   const width = mount.clientWidth;
@@ -14661,6 +15399,7 @@ setSwitch(document.querySelector('#hudToggle'), hudEnabled);
 setSwitch(document.querySelector('#reticleToggle'), reticleEnabled);
 setSwitch(document.querySelector('#gameChatToggle'), gameChatEnabled);
 setSwitch(document.querySelector('#vignetteToggle'), vignetteEnabled);
+setSwitch(document.querySelector('#raceLineToggle'), raceLineEnabled);
 hud.classList.toggle('reticle-hidden', !reticleEnabled);
 soundToggle.addEventListener('click', async (event) => {
   const nextValue = !soundEnabled;
@@ -14732,10 +15471,17 @@ document.querySelector('#vignetteToggle').addEventListener('click', (event) => {
   hud.classList.toggle('no-vignette', !vignetteEnabled);
   saveSettings();
 });
+document.querySelector('#raceLineToggle').addEventListener('click', (event) => {
+  raceLineEnabled = !raceLineEnabled;
+  setSwitch(event.currentTarget, raceLineEnabled);
+  flightRaceLineRoot.visible = flying && raceLineEnabled && flightRaceLineRoot.children.length > 0
+    && (selectedMode === 'Race' || isMultiplayerRaceActive() || builderTestCourse);
+  saveSettings();
+});
 document.querySelector('#resetSettings').addEventListener('click', () => {
   const qualityChanged = quality !== 1.8;
-  setCameraFov(108);
-  setCameraAngle(22);
+  setCameraFov(90);
+  setCameraAngle(45);
   qualitySelect.value = '1.8';
   droneNeonColor = DEFAULT_DRONE_NEON_COLOR;
   droneNeonColorInput.value = droneNeonColor;
@@ -14754,12 +15500,14 @@ document.querySelector('#resetSettings').addEventListener('click', () => {
   reticleEnabled = true;
   gameChatEnabled = true;
   vignetteEnabled = true;
+  raceLineEnabled = true;
   syncFlightTuneControls();
   renderRatePreview();
   setSwitch(document.querySelector('#hudToggle'), true);
   setSwitch(document.querySelector('#reticleToggle'), true);
   setSwitch(document.querySelector('#gameChatToggle'), true);
   setSwitch(document.querySelector('#vignetteToggle'), true);
+  setSwitch(document.querySelector('#raceLineToggle'), true);
   hud.classList.remove('is-hidden', 'reticle-hidden', 'no-vignette');
   updateGameChatUI();
   updateRenderResolution();
@@ -14848,7 +15596,7 @@ function initializeMotorAudio() {
     overtoneLevel.gain.value = 0.012;
     overtone.connect(overtoneLevel).connect(bus);
     body.start(); blade.start(); overtone.start();
-    return { trim, index, body, blade, overtone };
+    return { trim, index, body, blade, overtone, bus };
   });
 
   const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
@@ -14864,7 +15612,7 @@ function initializeMotorAudio() {
 function updateMotorAudio(controls) {
   if (!audioContext || !motorGain) return;
   const now = audioContext.currentTime;
-  const active = soundEnabled && flying;
+  const active = soundEnabled && flying && !flightDamageState.crashed;
   motorGain.gain.setTargetAtTime(active ? 0.34 * audioVolume : 0, now, active ? 0.1 : 0.16);
   if (!active) {
     motorNoiseGain.gain.setTargetAtTime(0, now, 0.12);
@@ -14882,6 +15630,7 @@ function updateMotorAudio(controls) {
     -controls.pitch - controls.roll,
   ];
   motorVoices.forEach((voice, index) => {
+    voice.bus.gain.setTargetAtTime(flightDamageState.brokenProps[index] ? 0 : 0.22, now, 0.08);
     const localRpm = rpmTone * voice.trim * (1 + corrections[index] * 0.035);
     voice.body.frequency.setTargetAtTime(localRpm, now, 0.055);
     voice.blade.frequency.setTargetAtTime(localRpm * 2, now, 0.05);
@@ -15005,6 +15754,44 @@ function startRaceClockOnTakeoff(previous, current) {
   }
 }
 
+function updateDestroyedFlight(dt) {
+  flight.throttle = 0;
+  flight.motorOutput = 0;
+  flight.acceleration.set(0, -9.81, 0);
+  flight.velocity.addScaledVector(flight.acceleration, dt);
+  flight.velocity.addScaledVector(flight.velocity, -flightTune.airDrag * 0.28 * dt);
+  flight.position.addScaledVector(flight.velocity, dt);
+  resolveFlightWorldCollision();
+  resolveFlightPilotCollisions();
+
+  const groundY = flightGroundYAt(flight.position.x, flight.position.z, flight.position.y);
+  if (groundY > -9990 && flight.position.y < groundY + 0.7) {
+    flight.position.y = groundY + 0.7;
+    flight.velocity.multiplyScalar(0.12);
+    flight.impactAngularVelocity.multiplyScalar(Math.exp(-3.4 * dt));
+  }
+  const tumbleSpeed = flight.impactAngularVelocity.length();
+  if (tumbleSpeed > 0.001) {
+    flight.impactAngularAxis.copy(flight.impactAngularVelocity).divideScalar(tumbleSpeed);
+    flight.impactAngularStep.setFromAxisAngle(flight.impactAngularAxis, tumbleSpeed * dt);
+    flight.orientation.premultiply(flight.impactAngularStep).normalize();
+    flight.impactAngularVelocity.multiplyScalar(Math.exp(-1.5 * dt));
+  }
+
+  flight.speed = flight.velocity.length() * 3.6;
+  updateFlightDamageEffects(dt);
+  updateRaceTimerDisplay();
+  cameraAngleQuat.setFromAxisAngle(axisX, THREE.MathUtils.degToRad(cameraAngle));
+  camera.position.copy(flight.position).add(camOffset.set(0, 0.08, 0).applyQuaternion(flight.orientation));
+  camera.quaternion.copy(flight.orientation).multiply(cameraAngleQuat);
+  document.querySelector('#flightPrompt').textContent = 'DRONE DESTROYED. RESET TO RECOVER.';
+  document.querySelector('#speedValue').textContent = String(Math.round(flight.speed)).padStart(3, '0');
+  document.querySelector('#altitudeValue').textContent = Math.max(0, flight.position.y - groundY).toFixed(1);
+  document.querySelector('#throttleValue').textContent = '0%';
+  document.querySelector('#throttleBar').style.width = '0%';
+  updateMotorAudio({ pitch: 0, roll: 0 });
+}
+
 function updateFlight(dt) {
   previousFlightPosition.copy(flight.position);
   previousFlightOrientation.copy(flight.orientation);
@@ -15041,6 +15828,10 @@ function updateFlight(dt) {
     updateMotorAudio({ pitch: 0, roll: 0 });
     updateRaceTimerDisplay();
     updateRaceStartOverlay();
+    return;
+  }
+  if (flightDamageState.crashed) {
+    updateDestroyedFlight(dt);
     return;
   }
   const controls = getFlightInput();
@@ -15084,6 +15875,7 @@ function updateFlight(dt) {
   const wheelbaseMeters = flightTune.wheelbase / 1000;
   const propThrustScale = (flightTune.propDiameter / 5) ** 2;
   const motorMaxThrustNewtons = flightTune.motorThrust / 1000 * 9.81 * propThrustScale;
+  const motorAuthority = flightAvailableMotorRatio();
   const hoverThrottle = flightTune.weight / (4 * flightTune.motorThrust * propThrustScale);
   const rollPitchInertia = vehicleMassKg * wheelbaseMeters ** 2 / 12;
   const maxAngularAcceleration = THREE.MathUtils.clamp(
@@ -15099,7 +15891,17 @@ function updateFlight(dt) {
   );
   const motorResponseAlpha = 1 - Math.exp(-dt / (flightTune.motorResponse / 1000));
   flight.motorAngularAcceleration.lerp(flight.pidAngularAcceleration, motorResponseAlpha);
+  flight.motorAngularAcceleration.multiplyScalar(motorAuthority);
   flight.bodyAngularVelocity.addScaledVector(flight.motorAngularAcceleration, dt);
+  flightDamageTorque.set(0, 0, 0);
+  flightDamageState.brokenProps.forEach((broken, motorIndex) => {
+    if (!broken) return;
+    const [motorX, motorZ] = flightCollisionMotorOffsets[motorIndex];
+    flightDamageTorque.x += motorZ;
+    flightDamageTorque.y += motorIndex % 2 ? 0.65 : -0.65;
+    flightDamageTorque.z -= motorX;
+  });
+  flight.bodyAngularVelocity.addScaledVector(flightDamageTorque, flight.motorOutput * 36 * dt);
   flight.bodyAngularVelocity.set(
     THREE.MathUtils.clamp(flight.bodyAngularVelocity.x, -2200, 2200),
     THREE.MathUtils.clamp(flight.bodyAngularVelocity.y, -1500, 1500),
@@ -15136,13 +15938,16 @@ function updateFlight(dt) {
   }
   const targetMotorOutput = flight.throttle * flight.throttle;
   flight.motorOutput += (targetMotorOutput - flight.motorOutput) * motorResponseAlpha;
-  const maximumThrustAcceleration = motorMaxThrustNewtons * 4 / vehicleMassKg;
+  const maximumThrustAcceleration = motorMaxThrustNewtons * 4 * motorAuthority / vehicleMassKg;
   flight.acceleration.copy(flight.up).multiplyScalar(maximumThrustAcceleration * flight.motorOutput);
   flight.acceleration.y -= 9.81;
   flight.acceleration.addScaledVector(flight.velocity, -flightTune.airDrag);
   flight.velocity.addScaledVector(flight.acceleration, dt);
   flight.position.addScaledVector(flight.velocity, dt);
-  resolveFlightWorldCollision();
+  const impact = resolveFlightWorldCollision();
+  if (impact) applyFlightImpactDamage(impact);
+  const pilotImpact = resolveFlightPilotCollisions();
+  if (pilotImpact) applyFlightImpactDamage(pilotImpact);
 
   let groundY = flightGroundYAt(flight.position.x, flight.position.z, flight.position.y);
   const padPosition = launchPadLocalPosition(flight.position);
@@ -15152,6 +15957,14 @@ function updateFlight(dt) {
   if (onLaunchBlock) groundY = Math.max(groundY, launchPadState.topY);
   if (flight.position.y < groundY + 0.7) {
     flight.position.y = groundY + 0.7;
+    if (flight.velocity.y < -flightDamageMinimumImpactSpeed) {
+      applyFlightImpactDamage({
+        speed: -flight.velocity.y,
+        part: 'body',
+        motorIndex: -1,
+        normal: new THREE.Vector3(0, 1, 0),
+      });
+    }
     if (flight.velocity.y < 0) flight.velocity.y *= -0.14;
     flight.velocity.x *= 0.9;
     flight.velocity.z *= 0.9;
@@ -15166,6 +15979,7 @@ function updateFlight(dt) {
   }
 
   flight.speed = flight.velocity.length() * 3.6;
+  updateFlightDamageEffects(dt);
   updateTrackIndicators();
   updateRaceTimerDisplay();
   updateRaceStartOverlay();
@@ -15242,6 +16056,12 @@ function animate(now) {
         drone.position.y = droneDisplayBaseY + Math.sin(spin * 1.6 + droneIndex + 1) * 0.16;
         drone.rotation.y = Math.sin(spin * 0.45 + droneIndex + 1) * 0.12;
         partyDroneRotors[droneIndex].forEach((prop, index) => { spinDroneRotor(prop, dt * (index % 2 ? -18 : 18)); });
+      });
+    }
+    if (flying) {
+      updatePartyDroneFlightVisuals(dt);
+      livePartyDroneRotors.forEach((rotors) => {
+        rotors.forEach((prop, index) => { spinDroneRotor(prop, dt * (index % 2 ? -18 : 18)); });
       });
     }
     if (menuBackdropRoot.visible) {
