@@ -622,10 +622,12 @@
       <section id="flightHud" class="flight-hud" hidden>
         <div class="hud-top"><button id="exitFlight" class="hud-back" type="button"><span>←</span> EXIT <kbd>ESC</kbd></button><div class="hud-center-tag"><span class="status-pip"></span> <span id="flightModeLabel">FREE FLIGHT</span></div><div class="hud-field-tag"><span>INPUT / <b id="flightInputLabel">KEYBOARD</b></span><span>FIELD / <b id="flightFieldLabel">NEON DOCKS</b></span></div></div>
         <div id="courseProgress" class="course-progress" aria-live="polite" hidden><b id="courseProgressCount">Lap: 1/1</b></div>
+        <aside id="flightDamageIndicator" class="flight-damage-indicator" aria-label="Drone damage status" aria-live="polite" aria-atomic="true" hidden><span class="flight-damage-heading">DRONE CONDITION</span><ul id="flightDamageStatusList"></ul></aside>
         <div id="raceTimer" class="race-timer" aria-live="polite" hidden><span id="raceTimerLabel">RACE TIME</span><b id="raceTimerValue">00:00.00</b></div>
         <aside id="raceLeaderboard" class="race-leaderboard" aria-label="Current race leaderboard" hidden><span class="race-leaderboard-heading">RACE ORDER</span><ol id="raceLeaderboardRows"></ol></aside>
         <aside id="raceFinishLeaderboard" class="race-leaderboard race-finish-leaderboard" aria-label="Race leaderboard" aria-live="polite" hidden>
           <header class="race-finish-leaderboard-header"><div><span id="raceFinishLeaderboardHeading" class="race-leaderboard-heading">RACE LEADERBOARD</span><strong id="raceFinishLeaderboardTrack"></strong></div></header>
+          <div class="race-finish-leaderboard-columns" aria-hidden="true"><span>RANK</span><span>PILOT</span><span>BEST TIME</span></div>
           <ol id="raceFinishLeaderboardRows"></ol>
           <p id="raceFinishLeaderboardEmpty" class="race-finish-leaderboard-empty" hidden>No recorded times for this track yet.</p>
           <nav id="raceFinishLeaderboardPager" class="race-finish-leaderboard-pager" aria-label="Leaderboard pages" hidden><button id="raceFinishLeaderboardPrev" type="button">PREV</button><span id="raceFinishLeaderboardPage"></span><button id="raceFinishLeaderboardNext" type="button">NEXT</button></nav>
