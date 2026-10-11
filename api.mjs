@@ -188,6 +188,7 @@ function publicUser(user) {
     username: displayUsername(user.username),
     createdAt: user.createdAt,
     xp: Math.max(0, Math.floor(Number(user.xp) || 0)),
+    points: Math.max(0, Math.floor(Number(user.points) || 0)),
     firstPlaces: Math.max(0, Math.floor(Number(user.firstPlaces) || 0)),
   };
 }
@@ -430,7 +431,7 @@ async function handleAuth(request, response, url) {
     const usernameTaken = store.users.some((candidate) => typeof candidate.username === 'string' && candidate.username.toLowerCase() === username.toLowerCase());
     if (usernameTaken) return json(response, 409, { error: 'That username is already taken. Choose another.' });
 
-    const user = { id: randomUUID(), email: setup.email, username, createdAt: new Date().toISOString(), xp: 0, firstPlaces: 0 };
+    const user = { id: randomUUID(), email: setup.email, username, createdAt: new Date().toISOString(), xp: 0, points: 0, firstPlaces: 0 };
     const token = randomBytes(32).toString('base64url');
     store.users.push(user);
     store.sessions = store.sessions.filter((session) => session.expiresAt > Date.now());
@@ -747,8 +748,26 @@ async function handleTeams(request, response, url) {
 }
 
 const communityTrackBiomes = new Set(['neon-docks', 'neon-city', 'pine-basin', 'cinder-quarry']);
-const communityTrackPropTypes = new Set(['podium', 'relay-podium-gate', 'house', 'warehouse', 'tower', 'container', 'barrier']);
-const communityTrackGateTypes = new Set(['neon-square', 'neon-ladder', 'neon-flag', 'neon-hurdle', 'neon-dive']);
+const communityTrackPropTypes = new Set([
+  'podium', 'relay-podium-gate',
+  'house', 'warehouse', 'office', 'shop', 'hangar', 'apartment', 'tower', 'factory', 'motel', 'diner',
+  'gasStation', 'waterTower', 'parkingGarage', 'maintenanceShed', 'loadingOffice', 'controlTower', 'fireStation',
+  'greenhouse', 'lighthouse', 'pavilion', 'container', 'gantryCrane', 'forklift', 'pipeRack', 'generator',
+  'transformer', 'conveyor', 'cableReel', 'palletStack', 'drumCluster', 'cargoCrate', 'bollardRow', 'winch',
+  'oilTank', 'silo', 'loadingRamp', 'mooringPost', 'railCar', 'cargoNet', 'barrier', 'trafficSignal', 'roadSign',
+  'roadSection', 'fireHydrant', 'bench', 'busShelter', 'utilityBox', 'dumpster', 'loadingSign', 'trashCan', 'parkingMeter',
+  'roadCone', 'securityGate', 'streetKiosk', 'streetLamp', 'twinStreetLamp', 'floodlightTower', 'bollardLight',
+  'lanternPost', 'compactCar', 'pickupTruck', 'cargoVan', 'boxTruck', 'semiTruck', 'shuttleBus', 'scooter',
+  'yardTug', 'pineTree', 'deciduousTree', 'palmTree', 'shrub', 'rockCluster', 'planter', 'flowerBed', 'hedge',
+  'boulder', 'deadTree', 'landingPad', 'targetDisc', 'windsock', 'hoopObstacle', 'checkpointPylon', 'beacon',
+  'slalomGate', 'droneDock', 'tunnelArch', 'lightArch',
+]);
+const communityPropHuntPropTypes = new Set([
+  'roadSection', 'generator', 'cableReel', 'palletStack', 'drumCluster', 'cargoCrate', 'winch',
+  'fireHydrant', 'utilityBox', 'dumpster', 'trashCan', 'parkingMeter', 'roadCone', 'streetKiosk',
+  'bollardLight', 'shrub', 'rockCluster', 'flowerBed', 'beacon', 'scooter', 'targetDisc',
+]);
+const communityTrackGateTypes = new Set(['neon-square', 'neon-ladder', 'neon-flag', 'neon-hurdle', 'neon-dive', 'relay-podium-gate']);
 const communityTrackGateColors = new Set(['cyan', 'coral', 'lime', 'orange', 'violet']);
 const redRacePodiumTopOffset = 3.1325;
 const redRacePodiumHeadingOffset = Math.PI / 2;
@@ -811,7 +830,10 @@ async function handleCommunityTracks(request, response) {
   if (!communityTrackBiomes.has(body.biomeId)) return json(response, 400, { error: 'Choose a valid track environment.' });
   const gameMode = body.gameMode === undefined ? '4v4' : body.gameMode;
   if (!communityTrackGameModes.has(gameMode)) return json(response, 400, { error: 'Choose a valid track game mode.' });
-  if (!Array.isArray(body.points) || body.points.length < 2 || body.points.length > 80) return json(response, 400, { error: 'A published track needs 2–80 gates.' });
+  const propHuntMap = gameMode === 'prop-hunt' && Array.isArray(body.points) && body.points.length === 0;
+  if (!Array.isArray(body.points) || (!propHuntMap && body.points.length < 2) || body.points.length > 80) {
+    return json(response, 400, { error: gameMode === 'prop-hunt' ? 'A Prop Hunt map cannot contain race gates.' : 'A published track needs 2–80 gates.' });
+  }
   const laps = Number.isSafeInteger(body.laps) && body.laps >= 1 && body.laps <= 5 ? body.laps : 1;
   const points = [];
   for (const point of body.points) {
@@ -879,6 +901,9 @@ async function handleCommunityTracks(request, response) {
     if (!object || typeof object !== 'object' || Array.isArray(object) || !communityTrackPropTypes.has(object.type)) {
       return json(response, 400, { error: 'A track includes an unsupported environment object.' });
     }
+    if (gameMode === 'prop-hunt' && !communityPropHuntPropTypes.has(object.type)) {
+      return json(response, 400, { error: 'Prop Hunt maps can only include compact props and road sections.' });
+    }
     const { x, y, z } = object;
     if (![x, y, z].every((value) => typeof value === 'number' && Number.isFinite(value))
       || Math.abs(x) > 330 || y < -15 || y > 60 || Math.abs(z) > 330) {
@@ -912,6 +937,7 @@ async function handleCommunityTracks(request, response) {
       scaleY: Math.round(scaleY * 100) / 100,
       scaleZ: Math.round(scaleZ * 100) / 100,
       isLaunchPodium: object.type === 'podium' && object.isLaunchPodium === true,
+      relayStartFinish: object.type === 'relay-podium-gate' && object.relayStartFinish === true,
     });
   }
   const podiumCount = objects.filter((object) => object.type === 'podium').length;
@@ -920,10 +946,14 @@ async function handleCommunityTracks(request, response) {
     if (relayPodiumGateCount !== relayStationCount || podiumCount > 0) {
       return json(response, 400, { error: 'A Relay track needs exactly four Relay podium gates and no separate podiums.' });
     }
+    if (objects.filter((object) => object.type === 'relay-podium-gate' && object.relayStartFinish).length !== 1
+      || gateTypes.length !== points.length || gateTypes[startFinishIndex] !== 'relay-podium-gate') {
+      return json(response, 400, { error: 'A Relay track must use one Relay podium arch as its Start / Finish gate.' });
+    }
     if (!relayStationPodiums({ points, startFinishIndex, objects }) || points.length !== relayStationCount) {
       return json(response, 400, { error: 'A Relay track needs exactly four route gates, each paired with a different Relay podium gate within 8 m.' });
     }
-  } else if (podiumCount < 8) {
+  } else if (gameMode !== 'prop-hunt' && podiumCount < 8) {
     return json(response, 400, { error: `A viable track needs 8 red race podiums (${podiumCount}/8 provided).` });
   }
 
@@ -987,6 +1017,11 @@ const lobbyHeartbeatMs = 35_000;
 const lobbyLifetimeMs = 3 * 60 * 60_000;
 const relayStationCount = 4;
 const relayGatePodiumDistance = 8;
+const propHuntRoundCount = 2;
+const propHuntHideDurationMs = 60_000;
+const propHuntHuntDurationMs = 75_000;
+const propHuntIntermissionMs = 5_000;
+const propHuntPulseRange = 7.5;
 
 function raceTrackRecord(lobby) {
   return lobby.trackSource === 'community'
@@ -1000,24 +1035,43 @@ function relayStationPodiums(track) {
   const startIndex = Number.isSafeInteger(track.startFinishIndex) && track.startFinishIndex >= 0 && track.startFinishIndex < track.points.length
     ? track.startFinishIndex
     : 0;
-  const routePoints = [track.points[startIndex], ...track.points.filter((_, index) => index !== startIndex)];
-  const availablePodiums = track.objects.filter((object) => object.type === 'relay-podium-gate').slice();
+  const routePointIndices = [startIndex, ...track.points.map((_, index) => index).filter((index) => index !== startIndex)];
+  const routes = routePointIndices.map((pointIndex, stationIndex) => ({
+    point: track.points[pointIndex],
+    stationIndex,
+    key: track.gateIds?.[pointIndex] || `${track.points[pointIndex][0]},${track.points[pointIndex][2]}`,
+  })).sort((a, b) => a.key.localeCompare(b.key));
+  const availablePodiums = track.objects.filter((object) => object.type === 'relay-podium-gate').slice()
+    .sort((a, b) => a.x - b.x || a.z - b.z);
   if (availablePodiums.length !== relayStationCount || track.objects.some((object) => object.type === 'podium')) return null;
-  const stations = [];
-  for (const point of routePoints) {
-    let nearestIndex = -1;
-    let nearestDistance = Infinity;
-    availablePodiums.forEach((podium, index) => {
-      const distance = Math.hypot(point[0] - podium.x, point[2] - podium.z);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
+  let best = null;
+  const matchStations = (routeIndex, usedPodiums, stations, startFinishMatches, withinRange, totalDistance) => {
+    if (routeIndex >= routes.length) {
+      const better = !best
+        || startFinishMatches > best.startFinishMatches
+        || (startFinishMatches === best.startFinishMatches && withinRange > best.withinRange)
+        || (startFinishMatches === best.startFinishMatches && withinRange === best.withinRange
+          && totalDistance < best.totalDistance - 0.000001);
+      if (better) best = { startFinishMatches, withinRange, totalDistance, stations: stations.slice() };
+      return;
+    }
+
+    const route = routes[routeIndex];
+    availablePodiums.forEach((podium, podiumIndex) => {
+      if (usedPodiums.has(podiumIndex)) return;
+      const distance = Math.hypot(route.point[0] - podium.x, route.point[2] - podium.z);
+      usedPodiums.add(podiumIndex);
+      stations.push({ routeIndex: route.stationIndex, podium, distance });
+      matchStations(routeIndex + 1, usedPodiums, stations,
+        startFinishMatches + Number(route.stationIndex === 0 && podium.relayStartFinish === true),
+        withinRange + Number(distance <= relayGatePodiumDistance), totalDistance + distance);
+      stations.pop();
+      usedPodiums.delete(podiumIndex);
     });
-    if (nearestIndex < 0 || nearestDistance > relayGatePodiumDistance) return null;
-    stations.push(availablePodiums.splice(nearestIndex, 1)[0]);
-  }
-  return stations;
+  };
+  matchStations(0, new Set(), [], 0, 0, 0);
+  if (best?.withinRange !== relayStationCount) return null;
+  return best.stations.sort((a, b) => a.routeIndex - b.routeIndex).map(({ podium }) => podium);
 }
 
 function lobbyHasCompatibleTrack(lobby) {
@@ -1058,12 +1112,84 @@ function lobbyMinimumRacePlayers(lobby) {
   return lobby.gameMode === 'relay-race' ? 8 : 2;
 }
 
+function assignPropHuntRound(lobby, round, now = Date.now()) {
+  const state = lobby.propHunt;
+  if (!state) return;
+  const hunterTeam = (round - 1) % 2 === 0 ? 'teamA' : 'teamB';
+  lobby.members.forEach((member, index) => {
+    if (!['teamA', 'teamB'].includes(member.propHuntTeam)) member.propHuntTeam = index % 2 === 0 ? 'teamA' : 'teamB';
+    member.propHuntRole = member.propHuntTeam === hunterTeam ? 'hunter' : 'hider';
+    member.propHuntCaught = false;
+    member.propHuntEnergy = 100;
+    member.propHuntEnergyAt = now;
+    member.propHuntPulseReadyAt = 0;
+  });
+  state.round = round;
+  state.roundStartedAt = Number(lobby.raceAt) || now;
+  state.phase = 'hiding';
+  state.hidingEndsAt = state.roundStartedAt + propHuntHideDurationMs;
+  state.roundEndsAt = state.hidingEndsAt + propHuntHuntDurationMs;
+  state.nextRoundAt = null;
+  state.caughtUserIds = [];
+  state.lastRoundWinner = null;
+}
+
+function updatePropHuntLobby(lobby, now = Date.now()) {
+  const state = lobby.propHunt;
+  if (lobby.gameMode !== 'prop-hunt' || !state) return;
+  if (!state.scores || !Number.isFinite(state.scores.teamA) || !Number.isFinite(state.scores.teamB)) {
+    state.scores = { teamA: 0, teamB: 0 };
+  }
+  if (state.phase === 'round') {
+    state.phase = 'hunting';
+    state.hidingEndsAt = Number(state.roundStartedAt) || now;
+  }
+  if (state.phase === 'hiding' && lobby.status === 'racing') {
+    if (now < state.hidingEndsAt) return;
+    state.phase = 'hunting';
+    lobby.updatedAt = now;
+  }
+  if (state.phase === 'hunting' && lobby.status === 'racing') {
+    const hiders = lobby.members.filter((member) => member.propHuntRole === 'hider');
+    const allHidersCaught = hiders.length === 0 || hiders.every((member) => member.propHuntCaught);
+    if (!allHidersCaught && now < state.roundEndsAt) return;
+    const hunterTeam = (state.round - 1) % 2 === 0 ? 'teamA' : 'teamB';
+    const winner = allHidersCaught ? hunterTeam : (hunterTeam === 'teamA' ? 'teamB' : 'teamA');
+    state.scores[winner] += 1;
+    state.lastRoundWinner = winner;
+    const tiedAfterRegulation = state.round >= propHuntRoundCount
+      && state.scores.teamA === state.scores.teamB;
+    const playAnotherRound = state.round < propHuntRoundCount || tiedAfterRegulation;
+    if (tiedAfterRegulation) state.totalRounds = state.round + 1;
+    state.phase = playAnotherRound ? 'intermission' : 'complete';
+    state.nextRoundAt = state.phase === 'intermission' ? now + propHuntIntermissionMs : null;
+    if (state.phase === 'complete') {
+      state.winner = state.scores.teamA === state.scores.teamB
+        ? 'draw'
+        : state.scores.teamA > state.scores.teamB ? 'teamA' : 'teamB';
+      lobby.results = [{ gameMode: 'prop-hunt', winner: state.winner, teamA: state.scores.teamA, teamB: state.scores.teamB }];
+      lobby.status = 'open';
+      lobby.startAt = null;
+      lobby.raceAt = null;
+    }
+    lobby.updatedAt = now;
+    return;
+  }
+  if (state.phase !== 'intermission' || now < state.nextRoundAt) return;
+  const nextRound = state.round + 1;
+  lobby.status = 'starting';
+  lobby.startAt = now + 3000;
+  lobby.raceAt = lobby.startAt + 3000;
+  assignPropHuntRound(lobby, nextRound, now);
+  lobby.updatedAt = now;
+}
+
 function beginLobbyRace(lobby, now = Date.now()) {
   if (lobby.status !== 'open'
     || lobby.members.length < lobbyMinimumRacePlayers(lobby)
     || !lobby.members.every((member) => member.readyAt)
     || !lobbyHasCompatibleTrack(lobby)
-    || raceGateCount(lobby) < 2) return false;
+    || (lobby.gameMode !== 'prop-hunt' && raceGateCount(lobby) < 2)) return false;
   lobby.status = 'starting';
   lobby.startAt = now + 10_000;
   lobby.raceAt = lobby.startAt + 5000;
@@ -1093,6 +1219,9 @@ function beginLobbyRace(lobby, now = Date.now()) {
       finishedAt: null,
     }))
     : null;
+  lobby.propHunt = lobby.gameMode === 'prop-hunt'
+    ? { round: 1, totalRounds: propHuntRoundCount, phase: 'hiding', scores: { teamA: 0, teamB: 0 }, caughtUserIds: [], hidingEndsAt: lobby.raceAt + propHuntHideDurationMs, roundEndsAt: lobby.raceAt + propHuntHideDurationMs + propHuntHuntDurationMs, nextRoundAt: null, lastRoundWinner: null, winner: null }
+    : null;
   lobby.members.forEach((member) => {
     member.finishedAt = null;
     member.didNotFinish = false;
@@ -1104,7 +1233,11 @@ function beginLobbyRace(lobby, now = Date.now()) {
     member.relayStation = lobby.gameMode === 'relay-race'
       ? relayTeamMemberIds[member.relayTeam].indexOf(member.userId)
       : null;
+    member.propHuntRole = null;
+    member.propHuntTeam = null;
+    member.propHuntCaught = false;
   });
+  if (lobby.propHunt) assignPropHuntRound(lobby, 1, now);
   lobby.updatedAt = now;
   return true;
 }
@@ -1254,6 +1387,7 @@ function cleanLobbies() {
     }
     if (lobby.status === 'starting' && now >= lobby.startAt) lobby.status = 'grid';
     if (lobby.status === 'grid' && now >= lobby.raceAt) lobby.status = 'racing';
+    updatePropHuntLobby(lobby, now);
     const raceAt = Number(lobby.raceAt || lobby.startAt || 0);
     if (lobby.status === 'racing' && now - raceAt > 25 * 60_000) {
       lobby.status = 'open';
@@ -1274,6 +1408,7 @@ function settleLobbyRace(lobby) {
   lobby.results = lobby.gameMode === 'relay-race'
     ? (lobby.relayTeams || []).map((team) => ({
       userId: team.memberIds[0],
+      teamIndex: team.teamIndex,
       username: `Team ${team.teamIndex === 0 ? 'Cyan' : 'Coral'}`,
       timeMs: team.lapTimes.reduce((total, lapTime) => total + lapTime, 0),
       didNotFinish: !team.finishedAt || team.memberIds.some((memberId) => lobby.members.find((member) => member.userId === memberId)?.didNotFinish),
@@ -1290,19 +1425,54 @@ function settleLobbyRace(lobby) {
       });
   lobby.results.sort((a, b) => Number(a.didNotFinish) - Number(b.didNotFinish) || a.timeMs - b.timeMs);
   const winner = lobby.results.find((result) => !result.didNotFinish);
-  if (winner) {
-    const winnerIds = lobby.gameMode === 'relay-race'
-      ? lobby.relayTeams?.find((team) => team.memberIds.includes(winner.userId))?.memberIds || []
-      : [winner.userId];
-    winnerIds.forEach((userId) => {
-      const user = store.users.find((candidate) => candidate.id === userId);
-      if (user) user.firstPlaces = Math.max(0, Math.floor(Number(user.firstPlaces) || 0)) + 1;
+  if (winner && lobby.gameMode === 'relay-race') {
+    lobby.results.forEach((result) => {
+      const isWinner = result.teamIndex === winner.teamIndex && !result.didNotFinish;
+      const pointsAwarded = isWinner ? 100 : 25;
+      const xpAwarded = isWinner ? 100 : 0;
+      const relayTeam = lobby.relayTeams?.find((team) => team.teamIndex === result.teamIndex);
+      let persistentTeamXpAwarded = false;
+      for (const userId of relayTeam?.memberIds || []) {
+        const user = store.users.find((candidate) => candidate.id === userId);
+        if (!user) continue;
+        user.points = Math.max(0, Math.floor(Number(user.points) || 0)) + pointsAwarded;
+        if (!isWinner) continue;
+        user.xp = Math.max(0, Math.floor(Number(user.xp) || 0)) + xpAwarded;
+        user.firstPlaces = Math.max(0, Math.floor(Number(user.firstPlaces) || 0)) + 1;
+        const persistentTeam = teamForUser(userId);
+        if (persistentTeam) {
+          persistentTeam.xp = Math.max(0, Math.floor(Number(persistentTeam.xp) || 0)) + xpAwarded;
+          persistentTeamXpAwarded = true;
+        }
+      }
+      result.pointsAwarded = pointsAwarded;
+      result.xpAwarded = xpAwarded;
+      result.teamXpAwarded = persistentTeamXpAwarded ? xpAwarded : 0;
     });
+  } else if (winner) {
+    const user = store.users.find((candidate) => candidate.id === winner.userId);
+    if (user) user.firstPlaces = Math.max(0, Math.floor(Number(user.firstPlaces) || 0)) + 1;
   }
   lobby.results = lobby.results.map(({ userId, ...result }) => result);
   lobby.status = 'open';
   lobby.startAt = null;
   lobby.raceAt = null;
+}
+
+function captureProgressionState() {
+  return {
+    users: store.users.map((user) => ({ user, xp: user.xp, points: user.points, firstPlaces: user.firstPlaces })),
+    teams: store.teams.map((team) => ({ team, xp: team.xp })),
+  };
+}
+
+function restoreProgressionState(snapshot) {
+  snapshot?.users?.forEach(({ user, xp, points, firstPlaces }) => {
+    user.xp = xp;
+    user.points = points;
+    user.firstPlaces = firstPlaces;
+  });
+  snapshot?.teams?.forEach(({ team, xp }) => { team.xp = xp; });
 }
 
 function removeLobbyMember(lobby, userId) {
@@ -1372,6 +1542,19 @@ function publicLobby(lobby) {
     })),
     finishedAt: team.finishedAt || null,
   })) : null;
+  const propHunt = lobby.propHunt ? {
+    round: lobby.propHunt.round,
+    totalRounds: lobby.propHunt.totalRounds,
+    phase: lobby.propHunt.phase,
+    scores: { ...lobby.propHunt.scores },
+    roundStartedAt: lobby.propHunt.roundStartedAt || null,
+    hidingEndsAt: lobby.propHunt.hidingEndsAt || null,
+    roundEndsAt: lobby.propHunt.roundEndsAt || null,
+    nextRoundAt: lobby.propHunt.nextRoundAt || null,
+    lastRoundWinner: lobby.propHunt.lastRoundWinner || null,
+    winner: lobby.propHunt.winner || null,
+    caughtUserIds: [...(lobby.propHunt.caughtUserIds || [])],
+  } : null;
   return {
     code: lobby.code,
     serverName: lobby.serverName || 'Open Flight Server',
@@ -1387,6 +1570,7 @@ function publicLobby(lobby) {
     startAt: lobby.startAt,
     raceAt: lobby.raceAt || null,
     relayTeams,
+    propHunt,
     members: lobby.members.map((member) => {
       const user = store.users.find((candidate) => candidate.id === member.userId);
       const relayTeam = Number.isSafeInteger(member.relayTeam) ? lobby.relayTeams?.[member.relayTeam] : null;
@@ -1394,6 +1578,7 @@ function publicLobby(lobby) {
         id: member.userId,
         username: displayUsername(user?.username),
         xp: Math.max(0, Math.floor(Number(user?.xp) || 0)),
+        points: Math.max(0, Math.floor(Number(user?.points) || 0)),
         isHost: member.userId === lobby.hostId,
         online: now - member.lastSeenAt < lobbyHeartbeatMs,
         ready: Boolean(member.readyAt),
@@ -1405,6 +1590,13 @@ function publicLobby(lobby) {
         relayTeam: Number.isSafeInteger(member.relayTeam) ? member.relayTeam : null,
         relayStation: Number.isSafeInteger(member.relayStation) ? member.relayStation : null,
         relayActive: Boolean(relayTeam && !relayTeam.finishedAt && relayTeam.memberIds[relayTeam.currentStation] === member.userId),
+        propHuntRole: member.propHuntRole || null,
+        propHuntTeam: member.propHuntTeam || null,
+        propHuntCaught: Boolean(member.propHuntCaught),
+        propHuntEnergy: member.propHuntRole === 'hunter'
+          ? Math.round(Math.min(100, Math.max(0, Number(member.propHuntEnergy) || 0)
+            + Math.max(0, now - (Number(member.propHuntEnergyAt) || now)) * 0.008))
+          : null,
       };
     }),
     results: lobby.results || [],
@@ -1561,10 +1753,53 @@ async function handleLobby(request, response, url) {
     if (previous && now - previous.receivedAt < 35) {
       return json(response, 429, { error: 'Drone position updates are arriving too quickly.' });
     }
+    const member = lobby.members.find((candidate) => candidate.userId === user.id);
+    const propHuntHunter = lobby.gameMode === 'prop-hunt' && member?.propHuntRole === 'hunter';
+    const samePropHuntRound = previous?.propHuntRound === lobby.propHunt?.round;
+    const propHuntSpawnPosition = propHuntHunter && lobby.status === 'grid'
+      ? samePropHuntRound && previous?.propHuntSpawnPosition
+        ? previous.propHuntSpawnPosition
+        : body.position
+      : samePropHuntRound ? previous?.propHuntSpawnPosition || null : null;
+    const hunterHeldAtSpawn = lobby.gameMode === 'prop-hunt' && lobby.status === 'racing'
+      && lobby.propHunt?.phase === 'hiding' && member?.propHuntRole === 'hunter';
+    const reportedPosition = hunterHeldAtSpawn ? propHuntSpawnPosition || body.position : body.position;
+    const reportedVelocity = hunterHeldAtSpawn ? [0, 0, 0] : body.velocity;
+    const isActiveHider = lobby.gameMode === 'prop-hunt' && lobby.status === 'racing'
+      && ['hiding', 'hunting'].includes(lobby.propHunt?.phase)
+      && member?.propHuntRole === 'hider' && !member.propHuntCaught;
+    const movedDistance = previous
+      ? Math.hypot(...body.position.map((coordinate, axis) => coordinate - previous.position[axis]))
+      : Infinity;
+    const sameHiderRound = previous?.propHuntRole === 'hider' && previous?.propHuntRound === lobby.propHunt?.round;
+    const stationarySince = !isActiveHider
+      ? 0
+      : !sameHiderRound || movedDistance > 0.18
+        ? now
+        : Number(previous.propHuntStationarySince) || previous.updatedAt;
+    const elapsed = previous && sameHiderRound ? Math.max(0, now - previous.updatedAt) : 0;
+    const priorSuspicion = sameHiderRound ? Math.max(0, Math.min(1, Number(previous.propHuntSuspicion) || 0)) : 0;
+    const propHuntSuspicion = isActiveHider
+      ? now - stationarySince > 8000
+        ? Math.min(1, priorSuspicion + elapsed * 0.00012)
+        : Math.max(0, priorSuspicion - elapsed * 0.00055)
+      : 0;
+    const previousNoiseAt = sameHiderRound ? Number(previous.propHuntNoiseAt) || 0 : 0;
+    const propHuntNoiseAt = isActiveHider && Math.hypot(...body.velocity) > 8 && now - previousNoiseAt >= 1200
+      ? now
+      : isActiveHider && sameHiderRound && now - previousNoiseAt < 4200
+        ? previousNoiseAt
+        : 0;
     snapshots.set(user.id, {
-      position: body.position,
-      velocity: body.velocity,
+      position: reportedPosition,
+      velocity: reportedVelocity,
       orientation: body.orientation,
+      propHuntRole: isActiveHider ? 'hider' : member?.propHuntRole || null,
+      propHuntRound: lobby.propHunt?.round || 0,
+      propHuntSpawnPosition,
+      propHuntStationarySince: stationarySince,
+      propHuntSuspicion,
+      propHuntNoiseAt,
       updatedAt: now,
       receivedAt: now,
     });
@@ -1587,10 +1822,80 @@ async function handleLobby(request, response, url) {
         orientation: state.orientation,
         updatedAt: state.updatedAt,
         raceTimeMs,
+        propHuntRole: member?.propHuntRole || null,
+        propHuntCaught: Boolean(member?.propHuntCaught),
+        propHuntSuspicion: state.propHuntSuspicion || 0,
+        propHuntNoiseAt: state.propHuntNoiseAt || 0,
       });
     }
     if (!snapshots.size) flightPositionSnapshots.delete(lobby.id);
-    return json(response, 200, { states, serverTime: now });
+    const localState = snapshots.get(user.id);
+    return json(response, 200, {
+      states,
+      localPropHunt: localState ? { suspicion: localState.propHuntSuspicion || 0, noiseAt: localState.propHuntNoiseAt || 0 } : null,
+      serverTime: now,
+    });
+  }
+
+  if (url.pathname === '/api/lobby/prop-hunt/action') {
+    const lobby = lobbyForUser(user.id);
+    if (!lobby || lobby.gameMode !== 'prop-hunt') return json(response, 409, { error: 'Join a Prop Hunt match before using role abilities.' });
+    const member = lobby.members.find((candidate) => candidate.userId === user.id);
+    if (body.action !== 'pulse' || lobby.status !== 'racing' || lobby.propHunt?.phase !== 'hunting') {
+      return json(response, 409, { error: 'Hunters cannot tag during the hiding period.' });
+    }
+    if (!member || member.propHuntRole !== 'hunter' || member.propHuntCaught) {
+      return json(response, 403, { error: 'Only active hunters can fire the tag pulse.' });
+    }
+    const now = Date.now();
+    const previousEnergy = Math.max(0, Math.min(100, Number(member.propHuntEnergy) || 0));
+    const energyAt = Number(member.propHuntEnergyAt) || now;
+    const energy = Math.min(100, previousEnergy + Math.max(0, now - energyAt) * 0.008);
+    if (now < Number(member.propHuntPulseReadyAt || 0)) {
+      return json(response, 429, { error: 'Tag pulse cooling down.', energy: Math.round(energy) });
+    }
+    if (energy < 24) return json(response, 429, { error: 'Tag energy is low. Wait for it to recharge.', energy: Math.round(energy) });
+    member.propHuntEnergy = energy - 24;
+    member.propHuntEnergyAt = now;
+    member.propHuntPulseReadyAt = now + 900;
+
+    const snapshots = flightPositionSnapshots.get(lobby.id);
+    const hunterState = snapshots?.get(user.id);
+    let target = null;
+    if (hunterState && now - hunterState.updatedAt <= 1500) {
+      const [qx, qy, qz, qw] = hunterState.orientation;
+      const forward = [
+        2 * (qx * qz + qw * qy),
+        2 * (qy * qz - qw * qx),
+        1 - 2 * (qx * qx + qy * qy),
+      ];
+      let nearest = propHuntPulseRange;
+      for (const candidate of lobby.members) {
+        if (candidate.propHuntRole !== 'hider' || candidate.propHuntCaught) continue;
+        const state = snapshots.get(candidate.userId);
+        if (!state || now - state.updatedAt > 1500) continue;
+        const delta = state.position.map((value, axis) => value - hunterState.position[axis]);
+        const distance = Math.hypot(...delta);
+        if (distance < 0.1 || distance > nearest) continue;
+        const facing = delta.reduce((sum, value, axis) => sum + value * forward[axis], 0) / distance;
+        if (facing < 0.78) continue;
+        nearest = distance;
+        target = candidate;
+      }
+    }
+    if (target) {
+      target.propHuntCaught = true;
+      lobby.propHunt.caughtUserIds = [...new Set([...(lobby.propHunt.caughtUserIds || []), target.userId])];
+    }
+    updatePropHuntLobby(lobby, now);
+    lobby.updatedAt = now;
+    if (!await persistLobby(response)) return;
+    return json(response, 200, {
+      success: Boolean(target),
+      energy: Math.round(member.propHuntEnergy),
+      taggedUsername: target ? displayUsername(store.users.find((candidate) => candidate.id === target.userId)?.username) : null,
+      lobby: publicLobby(lobby),
+    });
   }
 
   if (url.pathname === '/api/lobby/chat') {
@@ -1906,8 +2211,7 @@ async function handleLobby(request, response, url) {
         didNotFinish: candidate.didNotFinish,
       }));
       const previousLobby = { updatedAt: lobby.updatedAt, status: lobby.status, startAt: lobby.startAt, raceAt: lobby.raceAt, results: lobby.results };
-      const previousFirstPlaces = new Map(store.users.map((candidate) => [candidate.id, candidate.firstPlaces]));
-      const previousAwards = [];
+      const previousProgression = captureProgressionState();
       const station = relayTeam.currentStation;
       const segmentStartedAt = Number(relayTeam.segmentStartedAt || member.raceStartedAt);
       const split = {
@@ -1941,36 +2245,19 @@ async function handleLobby(request, response, url) {
       } else {
         relayTeam.currentStation = (relayTeam.currentStation + 1) % relayStationCount;
       }
-      let teamXpAwarded = false;
-      if (relayTeam.finishedAt) {
-        relayTeam.memberIds.forEach((memberId) => {
-          const pilot = store.users.find((candidate) => candidate.id === memberId);
-          if (!pilot) return;
-          const persistentTeam = teamForUser(memberId);
-          previousAwards.push({ pilot, pilotXp: pilot.xp, persistentTeam, teamXp: persistentTeam?.xp });
-          pilot.xp = Math.max(0, Math.floor(Number(pilot.xp) || 0)) + 100;
-          if (persistentTeam) {
-            persistentTeam.xp = Math.max(0, Math.floor(Number(persistentTeam.xp) || 0)) + 100;
-            teamXpAwarded = true;
-          }
-        });
-      }
       if (lobby.members.every((candidate) => candidate.finishedAt)) settleLobbyRace(lobby);
       lobby.updatedAt = now;
       if (!await persistLobby(response)) {
         Object.assign(relayTeam, previousTeam);
         lobby.members.forEach((candidate, index) => Object.assign(candidate, previousMembers[index]));
         Object.assign(lobby, previousLobby);
-        previousAwards.forEach(({ pilot, pilotXp, persistentTeam, teamXp }) => {
-          pilot.xp = pilotXp;
-          if (persistentTeam) persistentTeam.xp = teamXp;
-        });
-        store.users.forEach((candidate) => { candidate.firstPlaces = previousFirstPlaces.get(candidate.id); });
+        restoreProgressionState(previousProgression);
         return;
       }
+      const localRelayResult = lobby.results?.find((result) => result.teamIndex === relayTeam.teamIndex);
       return json(response, 200, {
         lobby: publicLobby(lobby),
-        teamXpAwarded,
+        teamXpAwarded: Boolean(localRelayResult?.teamXpAwarded),
         checkpointProgress: { passed: relayTeam.nextGateIndex, total: totalGates },
         relayTransition: {
           teamIndex: relayTeam.teamIndex,
@@ -2039,6 +2326,7 @@ async function handleLobby(request, response, url) {
         didNotFinish: candidate.didNotFinish,
       }));
       const previousLobby = { updatedAt: lobby.updatedAt, status: lobby.status, startAt: lobby.startAt, raceAt: lobby.raceAt, results: lobby.results };
+      const previousProgression = captureProgressionState();
       relayTeam.finishedAt = now;
       relayTeam.memberIds.forEach((memberId) => {
         const teammate = lobby.members.find((candidate) => candidate.userId === memberId);
@@ -2053,6 +2341,7 @@ async function handleLobby(request, response, url) {
         Object.assign(relayTeam, previousTeam);
         lobby.members.forEach((candidate, index) => Object.assign(candidate, previousMembers[index]));
         Object.assign(lobby, previousLobby);
+        restoreProgressionState(previousProgression);
         return;
       }
       return json(response, 200, { lobby: publicLobby(lobby), teamXpAwarded: false });

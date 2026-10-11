@@ -870,7 +870,7 @@ let builderTransformSpace = 'world';
 let builderTransformChanged = false;
 builderTransformControls.setMode(builderTransformMode);
 builderTransformControls.setSpace(builderTransformSpace);
-builderTransformControls.setSize(0.72);
+builderTransformControls.setSize(0.48);
 builderTransformControls.addEventListener('dragging-changed', (event) => {
   orbit.enabled = currentPage === 'builder' && !event.value;
   if (!event.value && builderTransformChanged) {
@@ -3373,6 +3373,7 @@ const gateTypes = {
   'neon-flag': { name: 'Neon Flag', model: '/models/gates/neon-flag.glb', raceAsset: true },
   'neon-hurdle': { name: 'Neon Hurdle', model: '/models/gates/neon-hurdle.glb', raceAsset: true, glowMultiplier: 0.78 },
   'neon-dive': { name: 'Neon Dive', model: '/models/gates/neon-dive.glb', raceAsset: true, modelScale: 0.0489 },
+  'relay-podium-gate': { name: 'Relay Podium Gate', raceAsset: true },
 };
 
 const gatePassBoundaryOpenings = {
@@ -3390,6 +3391,7 @@ const gatePassBoundaryOpenings = {
     { width: 18, height: 14.2, centerY: 7.5, z: -7.3 },
     { width: 18, height: 14.2, centerY: 7.5, z: 7.3 },
   ],
+  'relay-podium-gate': [{ width: 18.8, height: 15, centerY: 7.5, z: 0 }],
 };
 const gateBoundaryCorrectColor = 0x4cff88;
 const gateBoundaryWrongColor = 0xff4b65;
@@ -3587,6 +3589,7 @@ const builderEnvironmentCategories = [
   },
   {
     label: 'Street & Safety', form: 'street', items: [
+      ['roadSection', 'Road Section', 'Short asphalt lane with painted markings'],
       ['barrier', 'Barrier', 'Low obstacle'], ['trafficSignal', 'Traffic Signal', 'Three-light signal'], ['roadSign', 'Road Sign', 'Directional signpost'], ['fireHydrant', 'Fire Hydrant', 'Roadside hydrant'], ['bench', 'Bench', 'Street seating'], ['busShelter', 'Bus Shelter', 'Covered waiting area'], ['utilityBox', 'Utility Cabinet', 'Electrical service box'], ['dumpster', 'Dumpster', 'Industrial waste bin'], ['loadingSign', 'Loading Sign', 'Dock route marker'], ['trashCan', 'Trash Can', 'Public waste bin'],
       ['parkingMeter', 'Parking Meter', 'Curbside pay station'], ['roadCone', 'Road Cone', 'Reflective lane marker'], ['securityGate', 'Security Gate', 'Rising access barrier'], ['streetKiosk', 'Street Kiosk', 'Compact staffed booth'],
     ],
@@ -3619,6 +3622,14 @@ const builderEnvironmentCatalog = builderEnvironmentCategories.flatMap((category
   type, label, description, category: category.label, form: category.form, useCatalogModel: !BUILDER_EXISTING_PROP_TYPES.has(type),
 })));
 const builderEnvironmentCatalogByType = new Map(builderEnvironmentCatalog.map((item) => [item.type, item]));
+const PROP_HUNT_PLACEABLE_TYPES = new Set([
+  'roadSection', 'generator', 'cableReel', 'palletStack', 'drumCluster', 'cargoCrate', 'winch',
+  'fireHydrant', 'utilityBox', 'dumpster', 'trashCan', 'parkingMeter', 'roadCone', 'streetKiosk',
+  'bollardLight', 'shrub', 'rockCluster', 'flowerBed', 'beacon', 'scooter', 'targetDisc',
+]);
+function isPropHuntPlaceableType(type) {
+  return PROP_HUNT_PLACEABLE_TYPES.has(type);
+}
 const builderPropTypes = Object.fromEntries([
   ['podium', 'Podium'],
   ['relay-podium-gate', 'Relay Podium Gate'],
@@ -3632,13 +3643,14 @@ function renderBuilderEnvironmentCatalog() {
   for (const category of builderEnvironmentCategories) {
     const section = document.createElement('section');
     section.className = 'builder-environment-category';
+    section.dataset.builderCategory = category.label;
     const heading = document.createElement('h4');
     heading.className = 'builder-environment-category-title';
     heading.textContent = category.label;
     const library = document.createElement('div');
     library.className = 'gate-library builder-prop-library';
     library.setAttribute('role', 'group');
-    library.setAttribute('aria-label', category.label);
+    library.setAttribute('aria-label', `${category.label} props`);
     for (const [type, label, description] of category.items) {
       const button = document.createElement('button');
       button.className = 'gate-type';
@@ -3856,7 +3868,12 @@ function createCatalogEnvironmentModel(group, asset) {
       }
     }
   } else if (asset.form === 'street') {
-    if (type === 'parkingMeter') {
+    if (type === 'roadSection') {
+      addBox([14, 0.18, 20], [0, 0.09, 0], 'dark');
+      addBox([0.16, 0.025, 20], [-3.6, 0.195, 0], 'cream');
+      addBox([0.16, 0.025, 20], [3.6, 0.195, 0], 'cream');
+      for (let z = -8; z <= 8; z += 4) addBox([0.22, 0.03, 2], [0, 0.205, z], 'orange');
+    } else if (type === 'parkingMeter') {
       addCylinder(0.09, 0.14, 1.35, [0, 0.72, 0], 'steel', 7);
       addBox([0.46, 0.55, 0.3], [0, 1.62, 0], 'blue');
       addBox([0.28, 0.08, 0.08], [0, 1.72, 0.17], 'cyan');
@@ -4165,7 +4182,7 @@ function createBuilderPropModel(type) {
       stripe.rotation.z = -0.5;
     }
   }
-  if (type !== 'podium' && type !== 'relay-podium-gate') {
+  if (type !== 'podium' && type !== 'relay-podium-gate' && type !== 'roadSection') {
     const baseY = new THREE.Box3().setFromObject(group).min.y;
     group.scale.setScalar(BUILDER_ENVIRONMENT_OBJECT_SCALE);
     group.position.y = -baseY * (BUILDER_ENVIRONMENT_OBJECT_SCALE - 1);
@@ -4269,12 +4286,36 @@ function drawRelayPodiumGateNumberBadge(badge, label, isEntrySide) {
   badge.material.map.needsUpdate = true;
 }
 
+function updateRelayPodiumRouteGateData(object, data) {
+  if (!object || data?.type !== 'relay-podium-gate') return;
+  const opening = gatePassBoundaryOpenings['relay-podium-gate'][0];
+  const direction = data.relayEntryDirection === -1 ? -1 : 1;
+  data.relayEntryDirection = direction;
+  data.entryDirection = direction;
+  data.entryDirections = [direction];
+  data.isStartFinish = data.relayStartFinish === true;
+  data.routeOrder = 0;
+  object.userData.gateData = data;
+  object.userData.passBoundaryOpenings = [opening];
+  object.userData.gatePassPlanes = [{
+    point: new THREE.Vector3(opening.centerX || 0, opening.centerY, opening.z),
+    normal: new THREE.Vector3(0, 0, 1),
+    widthAxis: new THREE.Vector3(1, 0, 0),
+    heightAxis: new THREE.Vector3(0, 1, 0),
+    width: opening.width,
+    height: opening.height,
+    circle: false,
+  }];
+  object.userData.gatePassPlane = object.userData.gatePassPlanes[0];
+}
+
 function createBuilderPropObject(data, parent = builderPropRoot) {
   const object = new THREE.Group();
   object.userData.isBuilderProp = true;
   object.userData.propId = data.id;
   object.userData.propType = data.type;
   object.userData.isLaunchPodium = data.isLaunchPodium === true;
+  object.userData.relayStartFinish = data.relayStartFinish === true;
   object.position.set(data.x, data.y, data.z);
   object.rotation.set(
     THREE.MathUtils.degToRad(data.rotationX || 0),
@@ -4286,6 +4327,7 @@ function createBuilderPropObject(data, parent = builderPropRoot) {
     data.scaleY ?? data.scale ?? 1,
     data.scaleZ ?? data.scale ?? 1,
   );
+  if (data.type === 'relay-podium-gate') updateRelayPodiumRouteGateData(object, data);
   object.add(createBuilderPropModel(data.type));
   if (data.type === 'relay-podium-gate') createRelayPodiumGateIndicators(object);
   parent.add(object);
@@ -4311,6 +4353,7 @@ function loadCommunityTrackProps(track) {
   if (!track?.id?.startsWith('community-') || !Array.isArray(track.objects)) return;
   track.objects.slice(0, 100).forEach((object, index) => {
     if (!builderPropTypes[object?.type]) return;
+    if (track.gameMode === 'prop-hunt' && !isPropHuntPlaceableType(object.type)) return;
     const x = THREE.MathUtils.clamp(Number(object.x) || 0, -320, 320);
     const z = THREE.MathUtils.clamp(Number(object.z) || 0, -320, 320);
     createBuilderPropObject({
@@ -4328,6 +4371,7 @@ function loadCommunityTrackProps(track) {
       scaleY: THREE.MathUtils.clamp(Number(object.scaleY) || Number(object.scale) || 1, 0.5, 2),
       scaleZ: THREE.MathUtils.clamp(Number(object.scaleZ) || Number(object.scale) || 1, 0.5, 2),
       isLaunchPodium: object.type === 'podium' && object.isLaunchPodium === true,
+      relayStartFinish: object.type === 'relay-podium-gate' && object.relayStartFinish === true,
     }, communityPropRoot);
   });
 }
@@ -4440,6 +4484,7 @@ function renderBuilderModelPreviews() {
 }
 
 function loadGateModel(type) {
+  if (type === 'relay-podium-gate') return Promise.resolve(null);
   if (!gateModelCache.has(type)) {
     const config = gateTypes[type];
     const promise = fetch(config.model, { method: 'HEAD' }).then(async (response) => {
@@ -4703,6 +4748,20 @@ function updateBuilderGateBadgeVisibility(gate) {
   });
 }
 
+function updateBuilderGateBadgeSelection() {
+  customGateObjects.forEach((gate) => {
+    const data = gate.userData.gateData;
+    const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
+    (gate.userData.gateNumberBadges || []).forEach((badge) => {
+      const openingIndex = badge.userData.gateBadgeOpeningIndex ?? 0;
+      const selected = selectedGateId === data?.id
+        && (!hasMultipleOpenings || selectedGateOpeningIndex === openingIndex);
+      badge.scale.setScalar(selected ? 1.16 : 1);
+      badge.renderOrder = selected ? 12 : 10;
+    });
+  });
+}
+
 function createBuilderGate(data) {
   const gate = new THREE.Group();
   gate.userData.isBuilderGate = true;
@@ -4862,7 +4921,12 @@ function allTrackChoices() {
 }
 
 function compatibleTrackForMode(mode) {
-  const choices = allTrackChoices().filter((track) => trackSupportsMultiplayerMode(track, mode));
+  const communityChoices = allCommunityTracks().map((track) => {
+    const biomeId = trackEnvironmentId(track);
+    return { ...track, biomeId, environmentId: biomeId, biomeName: biomes[biomeId]?.name || '' };
+  });
+  const choices = [...allTrackChoices(), ...communityChoices]
+    .filter((track) => trackSupportsMultiplayerMode(track, mode));
   return choices.find((track) => track.biomeId === activeBiome && track.id === activeTrack?.id) || choices[0] || null;
 }
 
@@ -5025,7 +5089,10 @@ function updateTrackPickerPreview() {
   const name = document.querySelector('#trackPreviewName');
   const gateCount = document.querySelector('#trackPreviewGateCount');
   const canvas = document.querySelector('#trackPreviewCanvas');
+  const image = document.querySelector('#trackPreviewImage');
+  const mapThumb = document.querySelector('#mapThumb');
   const track = activeTrack;
+  const hasTrackImage = typeof track?.imageDataUrl === 'string' && track.imageDataUrl.startsWith('data:image/');
   const storedPoints = Array.isArray(track?.points)
     ? track.points.map((point) => [Number(point[0]) || 0, Number(point[2]) || 0])
     : [];
@@ -5036,6 +5103,13 @@ function updateTrackPickerPreview() {
 
   if (name) name.textContent = track?.name || 'No track selected';
   if (gateCount) gateCount.textContent = track ? `${points.length} GATES / ${Math.max(1, Number(track.laps) || 1)} ${Number(track.laps) === 1 || !track.laps ? 'LAP' : 'LAPS'}` : 'NO ROUTE AVAILABLE';
+  if (image) {
+    image.hidden = !hasTrackImage;
+    if (hasTrackImage && image.src !== track.imageDataUrl) image.src = track.imageDataUrl;
+    if (!hasTrackImage) image.removeAttribute('src');
+    image.alt = hasTrackImage ? `${track.name || 'Selected track'} track preview` : '';
+  }
+  if (mapThumb) mapThumb.classList.toggle('has-track-image', hasTrackImage);
   const tracks = trackCatalog[activeBiome] || [];
   const trackIndex = tracks.findIndex((candidate) => candidate.id === track?.id);
   const trackMark = document.querySelector('#trackPickerMark');
@@ -5049,8 +5123,7 @@ function updateTrackPickerPreview() {
   const trackSelect = document.querySelector('#trackSelect');
   if (trackSelect) trackSelect.disabled = !tracks.length;
   if (!canvas) return;
-  const environmentLabel = currentPage === 'trackPicker' ? 'Sky Platform' : (biomes[activeBiome]?.name || 'Flight');
-  canvas.setAttribute('aria-label', `${environmentLabel} environment, ${track?.name || 'no track selected'}, ${points.length} gates`);
+  canvas.setAttribute('aria-label', `${track?.name || 'No track selected'} route preview`);
 
   const bounds = canvas.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return;
@@ -5142,9 +5215,10 @@ function createCommunityTrackFlightGate(data) {
   gate.scale.set(data.scaleX ?? data.scale ?? 1, data.scaleY ?? data.scale ?? 1, data.scaleZ ?? data.scale ?? 1);
   createGatePassBoundary(gate, data);
 
-  const statusSign = createGateModelStatusSign(data.type);
-  gate.add(statusSign);
+  const statusSign = data.type === 'relay-podium-gate' ? null : createGateModelStatusSign(data.type);
+  if (statusSign) gate.add(statusSign);
   trackRoot.add(gate);
+  if (data.type === 'relay-podium-gate') return gate;
   loadGateModel(data.type).then((source) => {
     if (gate.parent !== trackRoot) return;
     if (!source) {
@@ -8109,6 +8183,8 @@ function showTrackPickerSkyPlatformLabel() {
 
 // The hangar drone stays empty until the uploaded GLB parts have loaded.
 const showDrone = new THREE.Group();
+let droneShowcaseModelReady = false;
+let droneShowcaseModelLoadComplete = false;
 const flightCameraModelOffset = new THREE.Vector3(0, 0.08, 0.46);
 showDrone.position.set(1.7, 8.2, -1.5);
 showDrone.rotation.y = 0.4;
@@ -8135,6 +8211,9 @@ function spinDroneRotor(rotor, angle) {
 const partyDroneRoot = new THREE.Group();
 partyDroneRoot.name = 'Flight party showcase drones';
 world.add(partyDroneRoot);
+const propHuntDisguiseRoot = new THREE.Group();
+propHuntDisguiseRoot.name = 'Prop Hunt disguises and clues';
+world.add(propHuntDisguiseRoot);
 const partyDroneObjects = Array.from({ length: 3 }, (_, index) => {
   const drone = showDrone.clone(true);
   drone.scale.setScalar(1.08);
@@ -8768,12 +8847,16 @@ async function loadDroneShowcaseModel() {
     applyDroneBodyColor(droneBodyColor);
     applyDronePropColor(dronePropColor);
     applyDroneSkin(droneSkinId);
+    droneShowcaseModelReady = true;
   } catch (error) {
     console.error('The uploaded showcase drone could not be loaded.', error);
   }
 }
 
-void loadDroneShowcaseModel().finally(() => requestAnimationFrame(captureMenuChoiceTiles));
+void loadDroneShowcaseModel().finally(() => {
+  droneShowcaseModelLoadComplete = true;
+  requestAnimationFrame(captureMenuChoiceTiles);
+});
 
 const fieldSpot = new THREE.Mesh(new THREE.CircleGeometry(4.6, 24), new THREE.MeshBasicMaterial({ color: colors.orange, transparent: true, opacity: 0.12, depthWrite: false }));
 fieldSpot.rotation.x = -Math.PI / 2;
@@ -8863,6 +8946,7 @@ const flightTuneDefaults = Object.freeze({
 });
 const flightTune = flightTuneDefaults;
 let currentPage = 'singleplayer';
+let soloCoursePickerOpen = false;
 let pageBeforeSettings = 'singleplayer';
 let selectedMode = 'Race';
 let flying = false;
@@ -8930,38 +9014,146 @@ function builderRelayPodiumGateCount() {
   return builderProps.filter((prop) => prop.type === 'relay-podium-gate').length;
 }
 
+function normalizeRelayPodiumStartFinishSelection(preferredId = null) {
+  const relayPodiums = builderProps.filter((prop) => prop.type === 'relay-podium-gate');
+  const selected = relayPodiums.find((prop) => prop.id === preferredId)
+    || relayPodiums.find((prop) => prop.relayStartFinish === true)
+    || (builderGameMode === 'relay-race' ? relayPodiums[0] : null)
+    || null;
+  relayPodiums.forEach((prop) => {
+    prop.relayStartFinish = prop.id === selected?.id;
+    const object = builderPropObjects.find((item) => item.userData.propId === prop.id);
+    if (!object) return;
+    object.userData.relayStartFinish = prop.relayStartFinish;
+    updateRelayPodiumRouteGateData(object, prop);
+  });
+  return selected?.id || null;
+}
+
+function builderRelayStartFinishRouteSlot() {
+  if (builderGameMode !== 'relay-race') return null;
+  const podium = builderProps.find((prop) => prop.type === 'relay-podium-gate' && prop.relayStartFinish === true);
+  const gateObject = builderPropObjects.find((object) => object.userData.propId === podium?.id);
+  if (!podium || !gateObject) return null;
+  return {
+    gate: podium,
+    gateObject,
+    podium,
+    x: podium.x,
+    y: podium.y,
+    z: podium.z,
+    rotation: podium.rotationY ?? podium.rotation ?? 0,
+    rotationX: podium.rotationX || 0,
+    rotationZ: podium.rotationZ || 0,
+    scale: podium.scale ?? 1,
+    scaleX: podium.scaleX ?? podium.scale ?? 1,
+    scaleY: podium.scaleY ?? podium.scale ?? 1,
+    scaleZ: podium.scaleZ ?? podium.scale ?? 1,
+    color: 'cyan',
+    entryDirection: podium.relayEntryDirection === -1 ? -1 : 1,
+    entryDirections: [podium.relayEntryDirection === -1 ? -1 : 1],
+    openingIndex: null,
+    isStartFinish: true,
+    routeOrder: 0,
+    isRelayPodiumGate: true,
+  };
+}
+
+function builderRelayStationRouteSlots() {
+  return orderedBuilderGates().slice(0, RELAY_STATION_COUNT);
+}
+
+function matchBuilderRelayStations(routeSlots, relayPodiums) {
+  const routes = routeSlots.slice(0, RELAY_STATION_COUNT)
+    .map((routeSlot, stationIndex) => ({ routeSlot, stationIndex }))
+    .sort((a, b) => {
+      const aKey = `${a.routeSlot.gate.id}:${a.routeSlot.openingIndex ?? 'single'}`;
+      const bKey = `${b.routeSlot.gate.id}:${b.routeSlot.openingIndex ?? 'single'}`;
+      return aKey.localeCompare(bKey);
+    });
+  const podiums = relayPodiums.slice().sort((a, b) => a.x - b.x || a.z - b.z || String(a.id).localeCompare(String(b.id)));
+  let best = { matched: -1, startFinishMatches: -1, withinRange: -1, distance: Infinity, pairs: [] };
+
+  const search = (routeIndex, usedPodiums, pairs, startFinishMatches, withinRange, totalDistance) => {
+    if (routeIndex >= routes.length) {
+      const better = pairs.length > best.matched
+        || (pairs.length === best.matched && startFinishMatches > best.startFinishMatches)
+        || (pairs.length === best.matched && startFinishMatches === best.startFinishMatches && withinRange > best.withinRange)
+        || (pairs.length === best.matched && startFinishMatches === best.startFinishMatches
+          && withinRange === best.withinRange && totalDistance < best.distance - 0.000001);
+      if (better) best = { matched: pairs.length, startFinishMatches, withinRange, distance: totalDistance, pairs: pairs.slice() };
+      return;
+    }
+
+    const route = routes[routeIndex];
+    for (let podiumIndex = 0; podiumIndex < podiums.length; podiumIndex += 1) {
+      if (usedPodiums.has(podiumIndex)) continue;
+      const podium = podiums[podiumIndex];
+      const distance = Math.hypot(route.routeSlot.x - podium.x, route.routeSlot.z - podium.z);
+      usedPodiums.add(podiumIndex);
+      pairs.push({ ...route, podium, distance });
+      search(routeIndex + 1, usedPodiums, pairs,
+        startFinishMatches + Number(podium.relayStartFinish === true && route.routeSlot.isStartFinish),
+        withinRange + Number(distance <= RELAY_GATE_PODIUM_DISTANCE), totalDistance + distance);
+      pairs.pop();
+      usedPodiums.delete(podiumIndex);
+    }
+    search(routeIndex + 1, usedPodiums, pairs, startFinishMatches, withinRange, totalDistance);
+  };
+
+  search(0, new Set(), [], 0, 0, 0);
+  return best.pairs.sort((a, b) => a.stationIndex - b.stationIndex);
+}
+
+function builderRelayStationPairs() {
+  const relayPodiums = builderProps.filter((prop) => prop.type === 'relay-podium-gate');
+  const startFinishSlot = builderRelayStartFinishRouteSlot();
+  const assignedStartPodiumId = startFinishSlot?.podium.id;
+  const pairs = [];
+  if (startFinishSlot) {
+    pairs.push({
+      routeSlot: startFinishSlot,
+      stationIndex: 0,
+      podium: startFinishSlot.gateObject,
+      gateObject: startFinishSlot.gateObject,
+      distance: 0,
+    });
+  }
+  const checkpointSlots = builderRelayStationRouteSlots().filter((slot) => !slot.isStartFinish).slice(0, RELAY_STATION_COUNT - 1);
+  const checkpointPodiums = relayPodiums.filter((podium) => podium.id !== assignedStartPodiumId);
+  return [
+    ...pairs,
+    ...matchBuilderRelayStations(checkpointSlots, checkpointPodiums).flatMap((pair) => {
+      const podium = builderPropObjects.find((object) => object.userData.propId === pair.podium.id);
+      const gateObject = customGateObjects.find((object) => object.userData.gateId === pair.routeSlot.gate.id);
+      return podium && gateObject ? [{ ...pair, stationIndex: pair.stationIndex + 1, podium, gateObject }] : [];
+    }),
+  ];
+}
+
 function builderRelayStationsArePaired() {
   const routeGates = orderedBuilderGates();
-  const availablePodiums = builderProps.filter((prop) => prop.type === 'relay-podium-gate').slice();
-  if (routeGates.length !== RELAY_STATION_COUNT || availablePodiums.length !== RELAY_STATION_COUNT) return false;
-  return routeGates.every((gate) => {
-    let nearestIndex = -1;
-    let nearestDistance = Infinity;
-    availablePodiums.forEach((podium, index) => {
-      const distance = Math.hypot(gate.x - podium.x, gate.z - podium.z);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
-    });
-    if (nearestDistance > RELAY_GATE_PODIUM_DISTANCE || nearestIndex < 0) return false;
-    availablePodiums.splice(nearestIndex, 1);
-    return true;
-  });
+  const relayPodiums = builderProps.filter((prop) => prop.type === 'relay-podium-gate');
+  if (!builderRelayStartFinishRouteSlot() || routeGates.length !== RELAY_STATION_COUNT || relayPodiums.length !== RELAY_STATION_COUNT) return false;
+  const pairs = builderRelayStationPairs();
+  return pairs.length === RELAY_STATION_COUNT
+    && pairs.every((pair) => pair.distance <= RELAY_GATE_PODIUM_DISTANCE);
 }
 
 function builderTrackMissingRequirements() {
   const missing = [];
-  const routeSlots = builderGateRouteSlots();
-  if (!routeSlots.some((slot) => slot.isStartFinish)) missing.push('a marked start / finish gate');
+  const routeSlots = builderGameMode === 'relay-race' ? orderedBuilderGates() : builderGateRouteSlots();
+  if (!['relay-race', 'prop-hunt'].includes(builderGameMode) && !routeSlots.some((slot) => slot.isStartFinish)) missing.push('a marked start / finish gate');
   const numberedGateCount = routeSlots.filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length;
   if (builderGameMode === 'relay-race') {
-    if (numberedGateCount !== RELAY_STATION_COUNT - 1) missing.push('exactly 3 numbered gates for the four Relay stations');
+    if (!builderRelayStartFinishRouteSlot()) missing.push('one Relay podium gate marked as Start / Finish');
+    if (numberedGateCount !== RELAY_STATION_COUNT - 1) missing.push('exactly 3 numbered checkpoint gates');
     if (builderRelayPodiumGateCount() !== RELAY_STATION_COUNT) missing.push(`exactly 4 Relay podium gates (${builderRelayPodiumGateCount()}/4 placed)`);
-    else if (!builderRelayStationsArePaired()) missing.push('each Relay podium gate within 8 m of a different route gate');
+    else if (!builderRelayStationsArePaired()) missing.push('each numbered checkpoint within 8 m of a different Relay podium gate');
     if (builderPodiumCount()) missing.push('remove separate podiums and use Relay podium gates instead');
     return missing;
   }
+  if (builderGameMode === 'prop-hunt') return missing;
   if (numberedGateCount < 1) missing.push('at least one numbered gate');
   const podiumCount = builderPodiumCount();
   if (podiumCount < REQUIRED_TRACK_PODIUM_COUNT) missing.push(`${REQUIRED_TRACK_PODIUM_COUNT} red podiums (${podiumCount}/${REQUIRED_TRACK_PODIUM_COUNT} placed)`);
@@ -8992,6 +9184,15 @@ let partyRaceFinished = false;
 let partyRacePhase = 'lobby';
 let partyRaceGridSlot = 0;
 let partyRaceGoUntil = 0;
+let propHuntScanUntil = 0;
+let propHuntScanCooldownUntil = 0;
+let propHuntBurstCooldownUntil = 0;
+let propHuntNoiseAt = 0;
+let propHuntLastRoundKey = '';
+let propHuntLocalDisguise = null;
+const propHuntRemoteVisuals = new Map();
+const propHuntPulseEffects = [];
+const propHuntClientState = { lastPosition: new THREE.Vector3(), lastMoveAt: 0, suspicion: 0, pulseEnergy: 100, actionStatus: '', disguiseType: '' };
 let partyCountdownLabel = '';
 let partyCountdownNumber = '';
 let crewCheckpointQueue = Promise.resolve();
@@ -9124,6 +9325,14 @@ const inputConfig = {
   resetDroneButton: Number.isInteger(savedInput.resetDroneButton) && savedInput.resetDroneButton >= 0 && savedInput.resetDroneButton < 32 ? savedInput.resetDroneButton : null,
   axes: { yaw: 0, throttle: 1, roll: 2, pitch: 3, ...savedInput.axes },
   invert: { yaw: false, throttle: true, roll: true, pitch: true, ...savedInput.invert },
+  centeredThrottle: savedInput.centeredThrottle === true,
+  propHuntBindings: Object.fromEntries(Object.entries({ scan: 'KeyF', pulse: 'KeyV', burst: 'KeyB' }).map(([action, defaultCode]) => {
+    const binding = savedInput.propHuntBindings?.[action];
+    if (binding?.kind === 'button' && Number.isInteger(binding.index) && binding.index >= 0 && binding.index < 32) {
+      return [action, { kind: 'button', index: binding.index }];
+    }
+    return [action, { kind: 'key', code: typeof binding?.code === 'string' && /^(Key[A-Z]|Digit[0-9]|Space|ShiftLeft|ShiftRight|AltLeft|AltRight|ControlLeft|ControlRight)$/.test(binding.code) ? binding.code : defaultCode }];
+  })),
   centers: Array.isArray(savedInput.centers) ? savedInput.centers.slice(0, 8) : Array(8).fill(0),
   axisRanges: Array.from({ length: 8 }, (_, index) => {
     const range = savedInput.axisRanges?.[index];
@@ -9152,6 +9361,8 @@ const transmitterCalibrationCenterSampleCount = 30;
 let currentInputSource = '';
 let restartButtonCaptureUntil = 0;
 let resetDroneButtonCaptureUntil = 0;
+let propHuntBindCaptureAction = '';
+let propHuntBindCaptureUntil = 0;
 let previousGamepadButtons = [];
 let previousGamepadIndex = null;
 let restartPadButtonWasDown = false;
@@ -9185,6 +9396,27 @@ function syncRaceRestartControls(message = '') {
     const droneBinding = inputConfig.resetDroneButton === null ? 'BUTTON NOT BOUND' : `BUTTON ${inputConfig.resetDroneButton + 1}`;
     status.textContent = message || `R RESTARTS A SOLO RACE / RESTART RACE: ${raceBinding} / RESET DRONE: ${droneBinding}`;
   }
+}
+
+const propHuntBindingButtons = { scan: '#bindPropHuntScan', pulse: '#bindPropHuntPulse', burst: '#bindPropHuntBurst' };
+function propHuntBindingLabel(action) {
+  const binding = inputConfig.propHuntBindings[action];
+  if (binding?.kind === 'button') return `CONTROLLER BUTTON ${binding.index + 1}`;
+  const code = binding?.code || '';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  return ({ Space: 'SPACE', ShiftLeft: 'LEFT SHIFT', ShiftRight: 'RIGHT SHIFT' })[code] || code.toUpperCase();
+}
+
+function syncPropHuntBindingControls(message = '') {
+  Object.entries(propHuntBindingButtons).forEach(([action, selector]) => {
+    const button = document.querySelector(selector);
+    if (!button) return;
+    button.textContent = propHuntBindCaptureAction === action ? 'PRESS A KEY OR BUTTON' : propHuntBindingLabel(action);
+    button.setAttribute('aria-pressed', String(propHuntBindCaptureAction === action));
+  });
+  const status = document.querySelector('#propHuntBindingStatus');
+  if (status) status.textContent = message || `SCAN: ${propHuntBindingLabel('scan')} / TAG: ${propHuntBindingLabel('pulse')} / BURST: ${propHuntBindingLabel('burst')}`;
 }
 
 function setSettingsTab(name) {
@@ -9239,10 +9471,12 @@ function syncInputControls() {
   document.querySelectorAll('[data-axis-invert]').forEach((checkbox) => {
     checkbox.checked = Boolean(inputConfig.invert[checkbox.dataset.axisInvert]);
   });
+  document.querySelector('#centeredThrottleInput').checked = inputConfig.centeredThrottle;
   syncRaceRestartControls();
 }
 
 syncInputControls();
+syncPropHuntBindingControls();
 refreshGamepadList();
 
 document.querySelector('#scanGamepads').addEventListener('click', () => {
@@ -9269,6 +9503,17 @@ function beginControllerButtonCapture(action) {
 }
 document.querySelector('#bindRaceRestartButton').addEventListener('click', () => beginControllerButtonCapture('restart'));
 document.querySelector('#bindResetDroneButton').addEventListener('click', () => beginControllerButtonCapture('resetDrone'));
+function beginPropHuntBindingCapture(action) {
+  if (!Object.hasOwn(propHuntBindingButtons, action)) return;
+  propHuntBindCaptureAction = action;
+  propHuntBindCaptureUntil = performance.now() + 12_000;
+  restartButtonCaptureUntil = 0;
+  resetDroneButtonCaptureUntil = 0;
+  syncPropHuntBindingControls('PRESS A KEY OR A BUTTON ON THE SELECTED CONTROLLER WITHIN 12 SECONDS.');
+}
+Object.entries(propHuntBindingButtons).forEach(([action, selector]) => {
+  document.querySelector(selector).addEventListener('click', () => beginPropHuntBindingCapture(action));
+});
 window.addEventListener('gamepadconnected', (event) => {
   if (inputConfig.gamepadIndex === null) inputConfig.gamepadIndex = event.gamepad.index;
   refreshGamepadList(true);
@@ -9289,6 +9534,10 @@ document.querySelectorAll('[data-axis-invert]').forEach((checkbox) => checkbox.a
   inputConfig.invert[event.currentTarget.dataset.axisInvert] = event.currentTarget.checked;
   saveInputSettings();
 }));
+document.querySelector('#centeredThrottleInput').addEventListener('change', (event) => {
+  inputConfig.centeredThrottle = event.currentTarget.checked;
+  saveInputSettings();
+});
 document.querySelector('#rateTypeSelect').addEventListener('change', (event) => {
   inputConfig.rateType = event.currentTarget.value === 'actual' ? 'actual' : 'betaflight';
   syncRateControls();
@@ -9410,7 +9659,9 @@ function syncTransmitterCalibrationDialog() {
 
   if (calibration.stage === 'center') {
     title.textContent = 'Center controls';
-    instructions.textContent = 'Center sticks. Throttle at minimum.';
+    instructions.textContent = inputConfig.centeredThrottle
+      ? 'Center sticks and place the throttle at its zero position (mid-stick).'
+      : 'Center sticks. Throttle at minimum.';
     status.textContent = 'Click Ready when set.';
     action.disabled = false;
     action.textContent = 'READY';
@@ -9421,7 +9672,9 @@ function syncTransmitterCalibrationDialog() {
     const role = transmitterAxisRoles[calibration.roleIndex];
     const label = role.toUpperCase();
     const prompts = {
-      throttle: 'Sweep throttle from minimum to maximum and back. Keep sticks centered.',
+      throttle: inputConfig.centeredThrottle
+        ? 'Sweep throttle fully toward both ends and back. Keep sticks centered.'
+        : 'Sweep throttle from minimum to maximum and back. Keep sticks centered.',
       yaw: 'Sweep yaw fully left and right. Keep other controls centered.',
       pitch: 'Sweep pitch fully forward and back. Keep other controls centered.',
       roll: 'Sweep roll fully left and right. Keep other controls centered.',
@@ -9688,6 +9941,14 @@ function normalizedGamepadAxis(raw, index) {
 
 function normalizedThrottleAxis(raw, index) {
   const range = inputConfig.axisRanges[index] || { min: -1, max: 1 };
+  if (inputConfig.centeredThrottle) {
+    const center = THREE.MathUtils.clamp(Number(inputConfig.centers[index]) || 0, range.min, range.max);
+    const travel = inputConfig.invert.throttle ? center - raw : raw - center;
+    const availableTravel = inputConfig.invert.throttle ? center - range.min : range.max - center;
+    const value = THREE.MathUtils.clamp(travel / Math.max(availableTravel, 0.15), 0, 1);
+    const deadzone = THREE.MathUtils.clamp(inputConfig.deadzone, 0, 0.2);
+    return value <= deadzone ? 0 : (value - deadzone) / (1 - deadzone);
+  }
   const value = THREE.MathUtils.clamp((raw - range.min) / Math.max(range.max - range.min, 0.15), 0, 1);
   return inputConfig.invert.throttle ? 1 - value : value;
 }
@@ -9747,6 +10008,11 @@ function pollRestartGamepadButtons(pad) {
     resetDroneButtonCaptureUntil = 0;
     syncRaceRestartControls('RESET DRONE BINDING TIMED OUT.');
   }
+  if (propHuntBindCaptureAction && performance.now() >= propHuntBindCaptureUntil) {
+    propHuntBindCaptureAction = '';
+    propHuntBindCaptureUntil = 0;
+    syncPropHuntBindingControls('PROP HUNT BINDING TIMED OUT.');
+  }
   if (!pad) {
     previousGamepadButtons = [];
     previousGamepadIndex = null;
@@ -9797,7 +10063,18 @@ function pollRestartGamepadButtons(pad) {
   }
 
   let justBound = false;
-  if (restartButtonCaptureUntil || resetDroneButtonCaptureUntil) {
+  if (propHuntBindCaptureAction) {
+    const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
+    if (pressedIndex >= 0) {
+      inputConfig.propHuntBindings[propHuntBindCaptureAction] = { kind: 'button', index: pressedIndex };
+      propHuntBindCaptureAction = '';
+      propHuntBindCaptureUntil = 0;
+      syncPropHuntBindingControls(`CONTROLLER BUTTON ${pressedIndex + 1} BOUND.`);
+      saveInputSettings();
+      justBound = true;
+    }
+  }
+  if (!justBound && (restartButtonCaptureUntil || resetDroneButtonCaptureUntil)) {
     const pressedIndex = buttonStates.findIndex((pressed, index) => pressed && !previousGamepadButtons[index]);
     if (pressedIndex >= 0) {
       if (restartButtonCaptureUntil) {
@@ -9822,6 +10099,7 @@ function pollRestartGamepadButtons(pad) {
   const resetDroneButtonDown = inputConfig.resetDroneButton !== null && Boolean(buttonStates[inputConfig.resetDroneButton]);
   if (!justBound && restartButtonDown && !restartPadButtonWasDown) restartLocalRace('controller');
   if (!justBound && resetDroneButtonDown && !resetDronePadButtonWasDown) resetDrone();
+  if (!justBound) pollPropHuntActionButtons(buttonStates);
   restartPadButtonWasDown = restartButtonDown;
   resetDronePadButtonWasDown = resetDroneButtonDown;
   previousGamepadButtons = buttonStates;
@@ -9986,11 +10264,13 @@ function setAuthMessage(message = '', isError = false) {
 function updateAccountUI() {
   const accountButton = document.querySelector('#accountButton');
   const pilotXp = Math.max(0, Math.floor(Number(signedInUser?.xp) || 0));
+  const pilotPoints = Math.max(0, Math.floor(Number(signedInUser?.points) || 0));
   const firstPlaces = Math.max(0, Math.floor(Number(signedInUser?.firstPlaces) || 0));
   const pilotLevel = signedInUser ? Math.floor(pilotXp / 100) + 1 : 0;
   const rankEmblem = document.querySelector('#pilotRankEmblem');
   const rank = pilotLevel >= 20 ? 'elite' : pilotLevel >= 10 ? 'ace' : pilotLevel >= 5 ? 'wing' : pilotLevel > 0 ? 'cadet' : 'unranked';
   document.querySelector('#pilotXp').textContent = pilotXp.toLocaleString();
+  document.querySelector('#pilotPoints').textContent = pilotPoints.toLocaleString();
   document.querySelector('#pilotLevel').textContent = String(pilotLevel);
   document.querySelector('#pilotFirstPlaces').textContent = firstPlaces.toLocaleString();
   document.querySelector('#pilotRankMark').textContent = String(pilotLevel);
@@ -10081,6 +10361,10 @@ async function syncPartyFlightPositions() {
     });
     if (!flying || partyLobby?.code !== lobbyCode || signedInUser?.id !== userId) return;
     if (Number.isFinite(result.serverTime)) partyServerClockOffsetMs = result.serverTime - Date.now();
+    if (result.localPropHunt) {
+      propHuntClientState.suspicion = Math.max(0, Math.min(1, Number(result.localPropHunt.suspicion) || 0));
+      propHuntNoiseAt = Number(result.localPropHunt.noiseAt) || 0;
+    }
     partyFlightSnapshots.clear();
     for (const state of result.states || []) {
       if (!Array.isArray(state.position) || !Array.isArray(state.velocity) || !Array.isArray(state.orientation)) continue;
@@ -10089,6 +10373,10 @@ async function syncPartyFlightPositions() {
         velocity: new THREE.Vector3().fromArray(state.velocity),
         orientation: new THREE.Quaternion().fromArray(state.orientation).normalize(),
         raceTimeMs: Number.isFinite(state.raceTimeMs) ? Math.max(0, state.raceTimeMs) : null,
+        propHuntRole: state.propHuntRole || null,
+        propHuntCaught: Boolean(state.propHuntCaught),
+        propHuntSuspicion: Number(state.propHuntSuspicion) || 0,
+        propHuntNoiseAt: Number(state.propHuntNoiseAt) || 0,
         receivedAt: performance.now(),
       });
     }
@@ -10107,7 +10395,8 @@ function updatePartyDroneFlightVisuals(dt = 0.016) {
     const member = remoteMembers[index];
     const state = member ? partyFlightSnapshots.get(member.id) : null;
     const stateAge = state ? performance.now() - state.receivedAt : Infinity;
-    drone.visible = Boolean(state && stateAge <= 750);
+    drone.visible = Boolean(state && stateAge <= 750)
+      && !(partyLobby?.gameMode === 'prop-hunt' && member?.propHuntRole === 'hider');
     if (!drone.visible) {
       drone.userData.livePilotId = null;
       return;
@@ -10122,6 +10411,352 @@ function updatePartyDroneFlightVisuals(dt = 0.016) {
   });
   if (flying) partyDroneRoot.visible = visibleCount > 0;
   else if (!active) livePartyDroneObjects.forEach((drone) => { drone.visible = false; });
+}
+
+function propHuntLocalMember() {
+  return partyLobby?.members?.find((member) => member.id === signedInUser?.id) || null;
+}
+
+function activePropHuntRole() {
+  return partyLobby?.gameMode === 'prop-hunt' && partyRacePhase === 'race'
+    ? propHuntLocalMember()?.propHuntRole || null
+    : null;
+}
+
+function isPropHuntRoundActive() {
+  return Boolean(flying && activePropHuntRole() && ['hiding', 'hunting'].includes(partyLobby?.propHunt?.phase)
+    && partyRacePhase === 'race' && !partyLobby.propHunt.caughtUserIds?.includes(signedInUser?.id));
+}
+
+function propHuntDisguiseType(member) {
+  const supported = builderEnvironmentCatalog.map((item) => item.type).filter(isPropHuntPlaceableType);
+  const mapTypes = (activeTrack?.objects || []).map((object) => object.type).filter((type) => supported.includes(type));
+  const options = [...new Set(mapTypes.length ? mapTypes : supported)];
+  const seed = `${member?.id || 'local'}:${partyLobby?.propHunt?.round || 1}`;
+  const index = [...seed].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7) % options.length;
+  return options[index] || 'roadSection';
+}
+
+function createPropHuntVisual(member, isLocal = false) {
+  const root = new THREE.Group();
+  root.name = `Prop Hunt ${member?.username || 'pilot'} disguise`;
+  const model = createBuilderPropModel(propHuntDisguiseType(member));
+  model.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(model);
+  const size = bounds.getSize(new THREE.Vector3());
+  const largestDimension = Math.max(size.x, size.y, size.z, 0.1);
+  const modelScale = 4.8 / largestDimension;
+  const originalPositionY = model.position.y;
+  const targetOffsetY = size.y * modelScale / 2;
+  model.scale.multiplyScalar(modelScale);
+  model.position.y = -(bounds.min.y - originalPositionY) * modelScale;
+  root.add(model);
+  const signalMaterial = new THREE.MeshBasicMaterial({ color: 0x44eaff, transparent: true, opacity: 0.82, depthWrite: false });
+  const signal = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.055, 8, 36), signalMaterial);
+  signal.rotation.x = Math.PI / 2;
+  signal.position.y = targetOffsetY;
+  signal.visible = false;
+  root.add(signal);
+  propHuntDisguiseRoot.add(root);
+  const trailMaterial = new THREE.LineBasicMaterial({ color: 0x49efff, transparent: true, opacity: 0.88, depthWrite: false });
+  const trail = new THREE.Line(new THREE.BufferGeometry(), trailMaterial);
+  trail.visible = false;
+  propHuntDisguiseRoot.add(trail);
+  return { root, signal, trail, isLocal, targetOffsetY, lastPosition: new THREE.Vector3(), initialized: false };
+}
+
+function getPropHuntVisual(member, isLocal = false) {
+  const key = member.id || 'local';
+  let visual = propHuntRemoteVisuals.get(key);
+  if (!visual) {
+    visual = createPropHuntVisual(member, isLocal);
+    propHuntRemoteVisuals.set(key, visual);
+  }
+  return visual;
+}
+
+function playPropHuntCue(kind = 'clue') {
+  if (!soundEnabled || audioVolume <= 0) return;
+  try {
+    audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === 'suspended') void audioContext.resume().catch(() => {});
+    const now = audioContext.currentTime;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = kind === 'tag' ? 'triangle' : 'sawtooth';
+    oscillator.frequency.setValueAtTime(kind === 'tag' ? 740 : 340, now);
+    oscillator.frequency.exponentialRampToValueAtTime(kind === 'tag' ? 1080 : 190, now + 0.12);
+    gain.gain.setValueAtTime(0.035 * audioVolume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.15);
+  } catch { /* Optional role cue. */ }
+}
+
+function showPropHuntPulseEffect() {
+  const material = new THREE.MeshBasicMaterial({ color: 0x41eaff, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthWrite: false });
+  const mesh = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.08, 8, 28), material);
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(flight.orientation);
+  mesh.position.copy(flight.position).addScaledVector(forward, 0.8);
+  mesh.quaternion.copy(flight.orientation);
+  world.add(mesh);
+  propHuntPulseEffects.push({ mesh, startedAt: performance.now() });
+}
+
+function propHuntNearbyClueCount() {
+  const now = Date.now();
+  let count = 0;
+  for (const member of partyLobby?.members || []) {
+    if (member.propHuntRole !== 'hider' || member.propHuntCaught) continue;
+    const state = member.id === signedInUser?.id
+      ? { position: flight.position.toArray(), propHuntSuspicion: propHuntClientState.suspicion, propHuntNoiseAt }
+      : partyFlightSnapshots.get(member.id);
+    if (!state) continue;
+    const position = state.position instanceof THREE.Vector3 ? state.position : new THREE.Vector3().fromArray(state.position);
+    const near = position.distanceTo(flight.position) < 55;
+    if (near && ((Number(state.propHuntSuspicion) || 0) > 0.12 || now - (Number(state.propHuntNoiseAt) || 0) < 5000)) count += 1;
+  }
+  return count;
+}
+
+async function firePropHuntPulse() {
+  showPropHuntPulseEffect();
+  propHuntClientState.actionStatus = 'TAG PULSE FIRED';
+  try {
+    const result = await lobbyRequest('prop-hunt/action', { action: 'pulse' });
+    propHuntClientState.pulseEnergy = Number(result.energy) || 0;
+    if (result.lobby) updatePartyLobby(result.lobby);
+    propHuntClientState.actionStatus = result.success ? `TAGGED ${result.taggedUsername || 'PROP'}` : 'MISSED / ENERGY SPENT';
+    propHuntClientState.actionStatusUntil = performance.now() + 2600;
+    playPropHuntCue(result.success ? 'tag' : 'clue');
+  } catch (error) {
+    propHuntClientState.actionStatus = error.message;
+    propHuntClientState.actionStatusUntil = performance.now() + 2600;
+  }
+}
+
+function activatePropHuntAction(action) {
+  if (!isPropHuntRoundActive()) return false;
+  const role = activePropHuntRole();
+  const phase = partyLobby?.propHunt?.phase;
+  const now = performance.now();
+  if (action === 'scan' && role === 'hunter') {
+    if (phase !== 'hunting') return false;
+    if (now < propHuntScanCooldownUntil) return false;
+    propHuntScanUntil = now + 2600;
+    propHuntScanCooldownUntil = now + 9000;
+    propHuntClientState.actionStatus = `SCANNER / ${propHuntNearbyClueCount()} DISTURBANCE${propHuntNearbyClueCount() === 1 ? '' : 'S'}`;
+    propHuntClientState.actionStatusUntil = now + 2600;
+    playPropHuntCue('clue');
+    return true;
+  }
+  if (action === 'pulse' && role === 'hunter') {
+    if (phase !== 'hunting') return false;
+    if (now < (propHuntClientState.pulseReadyAt || 0)) return false;
+    propHuntClientState.pulseReadyAt = now + 900;
+    void firePropHuntPulse();
+    return true;
+  }
+  if (action === 'burst' && role === 'hider') {
+    if (now < propHuntBurstCooldownUntil) return false;
+    propHuntBurstCooldownUntil = now + 4800;
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(flight.orientation);
+    flight.velocity.addScaledVector(forward, 13);
+    propHuntNoiseAt = Date.now();
+    propHuntClientState.lastMoveAt = now;
+    propHuntClientState.suspicion = Math.max(0, propHuntClientState.suspicion - 0.22);
+    propHuntClientState.actionStatus = 'BURST / TRAIL EXPOSED';
+    propHuntClientState.actionStatusUntil = now + 2600;
+    playPropHuntCue('clue');
+    return true;
+  }
+  return false;
+}
+
+function pollPropHuntActionButtons(buttonStates) {
+  if (!isPropHuntRoundActive()) return;
+  for (const [action, binding] of Object.entries(inputConfig.propHuntBindings)) {
+    if (binding.kind !== 'button' || !buttonStates[binding.index] || previousGamepadButtons[binding.index]) continue;
+    if (activatePropHuntAction(action)) break;
+  }
+}
+
+function updateLocalPropHuntState(dt) {
+  if (!isPropHuntRoundActive() || activePropHuntRole() !== 'hider') return;
+  const now = performance.now();
+  const moved = flight.position.distanceTo(propHuntClientState.lastPosition) > 0.16;
+  if (moved) {
+    propHuntClientState.lastPosition.copy(flight.position);
+    propHuntClientState.lastMoveAt = now;
+    propHuntClientState.suspicion = Math.max(0, propHuntClientState.suspicion - dt * 0.55);
+  } else if (now - propHuntClientState.lastMoveAt > 8000) {
+    propHuntClientState.suspicion = Math.min(1, propHuntClientState.suspicion + dt * 0.12);
+  }
+  const speed = flight.velocity.length();
+  if (speed > 8 && Date.now() - propHuntNoiseAt > 1200) {
+    propHuntNoiseAt = Date.now();
+    propHuntClientState.actionStatus = 'FAST MOVE / TRAIL EXPOSED';
+    propHuntClientState.actionStatusUntil = now + 1400;
+    if (now - (propHuntClientState.lastNoiseCueAt || 0) > 5000) {
+      propHuntClientState.lastNoiseCueAt = now;
+      playPropHuntCue('clue');
+    }
+  }
+}
+
+function updatePropHuntHiderFlight(dt) {
+  const member = propHuntLocalMember();
+  const controls = getFlightInput();
+  const currentForward = new THREE.Vector3(0, 0, 1).applyQuaternion(flight.orientation);
+  const heading = Math.atan2(currentForward.x, currentForward.z) + controls.yaw * 1.65 * dt;
+  flight.orientation.setFromAxisAngle(axisY, heading);
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(flight.orientation);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(flight.orientation);
+  const input = forward.multiplyScalar(controls.pitch).addScaledVector(right, controls.roll);
+  if (input.lengthSq() > 1) input.normalize();
+  const maxSpeed = 5.6;
+  const slide = 1 - Math.exp(-dt * 2.8);
+  flight.velocity.x += (input.x * maxSpeed - flight.velocity.x) * slide;
+  flight.velocity.z += (input.z * maxSpeed - flight.velocity.z) * slide;
+  flight.velocity.y = 0;
+  flight.position.x = THREE.MathUtils.clamp(flight.position.x + flight.velocity.x * dt, -285, 285);
+  flight.position.z = THREE.MathUtils.clamp(flight.position.z + flight.velocity.z * dt, -285, 285);
+  const groundY = terrainSurfaceYAt(activeBiome, flight.position.x, flight.position.z);
+  const visual = getPropHuntVisual(member, true);
+  const propCenterHeight = Math.max(visual.targetOffsetY, flightGroundClearance());
+  flight.position.y = groundY + propCenterHeight;
+  resolveFlightWorldCollision();
+  flight.position.y = terrainSurfaceYAt(activeBiome, flight.position.x, flight.position.z) + propCenterHeight;
+  previousFlightPosition.copy(flight.position);
+  flight.speed = flight.velocity.length() * 3.6;
+  flight.throttle = 0.54;
+  flight.motorOutput = 0.54;
+  updateLocalPropHuntState(dt);
+  updateFlightCamera(dt);
+  updateRaceStartOverlay();
+  document.querySelector('#speedValue').textContent = String(Math.round(flight.speed)).padStart(3, '0');
+  document.querySelector('#altitudeValue').textContent = Math.max(0, flight.position.y - groundY).toFixed(1);
+  document.querySelector('#throttleValue').textContent = '54%';
+  document.querySelector('#throttleBar').style.width = '54%';
+  updateMotorAudio({ pitch: 0, roll: 0, yaw: controls.yaw, throttle: 0.54 });
+}
+
+function updatePropHuntHUD() {
+  const hud = document.querySelector('#propHuntHud');
+  if (!hud) return;
+  const lobby = partyLobby;
+  const state = lobby?.propHunt;
+  const active = Boolean(flying && lobby?.gameMode === 'prop-hunt' && state
+    && (partyRacePhase !== 'lobby' || state.phase === 'complete'));
+  hud.hidden = !active;
+  if (!active) return;
+  const member = propHuntLocalMember();
+  const role = member?.propHuntRole || 'HIDER';
+  const caught = Boolean(member?.propHuntCaught);
+  const releaseIn = Math.max(0, Math.ceil((Number(state.hidingEndsAt) - (Date.now() + partyServerClockOffsetMs)) / 1000));
+  const huntTimeLeft = Math.max(0, Math.ceil((Number(state.roundEndsAt) - (Date.now() + partyServerClockOffsetMs)) / 1000));
+  if (role === 'hider' && state.phase === 'hiding' && !propHuntClientState.disguiseType) {
+    propHuntClientState.disguiseType = propHuntDisguiseType(member);
+  }
+  const disguiseName = builderPropTypes[propHuntClientState.disguiseType] || 'Prop';
+  document.querySelector('#propHuntRoleLabel').textContent = `${role.toUpperCase()} / ${member?.propHuntTeam === 'teamA' ? 'TEAM A' : 'TEAM B'}`;
+  document.querySelector('#propHuntRoundLabel').textContent = `ROUND ${state.round} / ${state.totalRounds} / A ${state.scores.teamA || 0} : ${state.scores.teamB || 0} B`;
+  const status = state.phase === 'complete'
+    ? state.winner === 'draw' ? 'MATCH DRAW' : `${state.winner === member?.propHuntTeam ? 'YOUR TEAM WON' : 'YOUR TEAM LOST'}`
+    : caught ? 'TAGGED / WAIT FOR THE NEXT ROUND'
+      : state.phase === 'intermission' ? `NEXT ROUND IN ${Math.max(1, Math.ceil((state.nextRoundAt - Date.now()) / 1000))}S`
+        : partyLobby.status !== 'racing' ? 'ROUND STARTING / GET READY'
+          : state.phase === 'hiding' ? role === 'hunter'
+            ? `WAIT AT SPAWN / RELEASE IN ${releaseIn}S`
+            : `HIDE AS ${disguiseName.toUpperCase()} / ${releaseIn}S UNTIL HUNTERS RELEASE`
+            : performance.now() < (propHuntClientState.actionStatusUntil || 0) ? propHuntClientState.actionStatus
+              : role === 'hider' ? `STAY HIDDEN / ${huntTimeLeft}S LEFT / AVOID FAST BURSTS` : `FIND THE PROPS / ${huntTimeLeft}S LEFT`;
+  document.querySelector('#propHuntStatusLabel').textContent = status;
+  const meterName = role === 'hunter' ? 'TAG ENERGY' : 'SUSPICION';
+  const meter = role === 'hunter'
+    ? Number.isFinite(member?.propHuntEnergy) ? member.propHuntEnergy : propHuntClientState.pulseEnergy
+    : propHuntClientState.suspicion;
+  const percent = Math.round(role === 'hunter' ? meter : meter * 100);
+  document.querySelector('#propHuntMeterLabel').textContent = meterName;
+  document.querySelector('#propHuntMeterFill').style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  document.querySelector('#propHuntMeterValue').textContent = `${Math.max(0, Math.min(100, percent))}%`;
+  const bindingText = (action) => propHuntBindingLabel(action);
+  document.querySelector('#propHuntControlHint').textContent = role === 'hunter'
+    ? `${bindingText('scan')} SCAN / ${bindingText('pulse')} TAG PULSE`
+    : `${bindingText('burst')} BURST / WASD OR STICKS SLIDE / Q E ROTATE`;
+  if (partyRacePhase === 'race') {
+    const prompt = state.phase === 'hiding'
+      ? role === 'hunter' ? 'WAIT AT SPAWN / HUNTERS RELEASE IN 60 SECONDS' : `HIDE AS ${disguiseName.toUpperCase()} / HUNTERS RELEASE IN 60 SECONDS`
+      : role === 'hunter' ? 'SCAN FOR DISTURBANCES / TAG WITH A SHORT RANGE PULSE' : 'STAY DISGUISED / MOVE BEFORE YOUR SUSPICION SPIKES';
+    const flightPrompt = document.querySelector('#flightPrompt');
+    if (flightPrompt.textContent !== prompt) flightPrompt.textContent = prompt;
+  }
+}
+
+function updatePropHuntWorld() {
+  const active = Boolean(flying && partyLobby?.gameMode === 'prop-hunt' && partyRacePhase === 'race');
+  const huntersWaiting = partyLobby?.propHunt?.phase === 'hiding' && activePropHuntRole() === 'hunter';
+  propHuntDisguiseRoot.visible = active && ['hiding', 'hunting'].includes(partyLobby?.propHunt?.phase) && !huntersWaiting;
+  updatePropHuntHUD();
+  const now = performance.now();
+  while (propHuntPulseEffects.length && now - propHuntPulseEffects[0].startedAt > 420) {
+    const effect = propHuntPulseEffects.shift();
+    world.remove(effect.mesh);
+    effect.mesh.geometry.dispose();
+    effect.mesh.material.dispose();
+  }
+  for (const effect of propHuntPulseEffects) {
+    const progress = THREE.MathUtils.clamp((now - effect.startedAt) / 420, 0, 1);
+    effect.mesh.scale.setScalar(0.8 + progress * 5.5);
+    effect.mesh.material.opacity = 0.88 * (1 - progress);
+  }
+  if (!active) {
+    propHuntRemoteVisuals.forEach((visual) => { visual.root.visible = false; visual.trail.visible = false; });
+    return;
+  }
+  const scanActive = now < propHuntScanUntil && partyLobby?.propHunt?.phase === 'hunting'
+    && activePropHuntRole() === 'hunter';
+  const visibleIds = new Set();
+  for (const member of partyLobby.members) {
+    if (member.propHuntRole !== 'hider' || member.propHuntCaught) continue;
+    const isLocal = member.id === signedInUser?.id;
+    const snapshot = isLocal ? null : partyFlightSnapshots.get(member.id);
+    if (!isLocal && (!snapshot || performance.now() - snapshot.receivedAt > 1500)) continue;
+    const visual = getPropHuntVisual(member, isLocal);
+    visibleIds.add(member.id);
+    const position = isLocal ? flight.position : snapshot.position;
+    const suspicion = isLocal ? propHuntClientState.suspicion : snapshot.propHuntSuspicion;
+    const noiseAt = isLocal ? propHuntNoiseAt : snapshot.propHuntNoiseAt;
+    const recentNoise = Date.now() - noiseAt < 4200;
+    const groundY = terrainSurfaceYAt(activeBiome, position.x, position.z);
+    const nearbyToHunter = activePropHuntRole() === 'hunter' && position.distanceTo(flight.position) <= 55;
+    const scanClue = scanActive && nearbyToHunter && (suspicion > 0.04 || recentNoise);
+    if (!isLocal && nearbyToHunter && recentNoise && noiseAt > (visual.lastCueNoiseAt || 0)
+      && now - (visual.lastCueAt || 0) > 2400) {
+      visual.lastCueNoiseAt = noiseAt;
+      visual.lastCueAt = now;
+      playPropHuntCue('clue');
+    }
+    visual.root.position.set(position.x, groundY, position.z);
+    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(isLocal ? flight.orientation : snapshot.orientation);
+    visual.root.rotation.y = Math.atan2(direction.x, direction.z);
+    visual.signal.visible = scanClue || suspicion > 0.24 || recentNoise;
+    visual.signal.material.opacity = 0.2 + suspicion * 0.6;
+    if (suspicion > 0.02 && Math.floor(now / (320 - suspicion * 190)) % 2 === 0) visual.root.visible = false;
+    else visual.root.visible = true;
+    if (recentNoise && visual.initialized && visual.lastPosition.distanceTo(position) > 0.2) {
+      visual.trail.geometry.setFromPoints([visual.lastPosition, position]);
+      visual.trailUntil = Date.now() + 900;
+    }
+    visual.trail.material.opacity = Math.max(0, 1 - (Date.now() - noiseAt) / 4200);
+    visual.trail.visible = activePropHuntRole() === 'hunter' && recentNoise && Date.now() < (visual.trailUntil || 0);
+    visual.lastPosition.copy(position);
+    visual.initialized = true;
+  }
+  propHuntRemoteVisuals.forEach((visual, id) => {
+    if (!visibleIds.has(id)) { visual.root.visible = false; visual.trail.visible = false; }
+  });
 }
 
 function renderGameChatMessages() {
@@ -10195,6 +10830,7 @@ function updateGameChatUI() {
   }
 
   panel.hidden = !gameChatEnabled || !isGameChatSurfaceVisible();
+  root.classList.toggle('is-chat-docked-in-menu', !panel.hidden && !flying && currentPage === 'singleplayer');
   const lobbyTab = document.querySelector('#gameChatLobbyTab');
   const worldTab = document.querySelector('#gameChatWorldTab');
   const title = document.querySelector('#gameChatChannelTitle');
@@ -10480,16 +11116,62 @@ async function runFriendsAction(endpoint, payload, button = null) {
   }
 }
 
+let partyInvitePartySetup = null;
+
+async function ensureOpenPartyForInvite() {
+  if (partyInvitePartySetup) return partyInvitePartySetup;
+  partyInvitePartySetup = (async () => {
+    const current = await lobbyRequest('current', null);
+    if (current.lobby) {
+      updatePartyLobby(current.lobby);
+      if (current.lobby.status !== 'open') {
+        throw new Error('Your current party is already in a match. Wait for it to finish before inviting friends.');
+      }
+      return { lobby: current.lobby, created: false };
+    }
+
+    const selectedTrack = prepareTrackForMode(selectedMultiplayerMode);
+    if (!selectedTrack) throw new Error(missingModeTrackMessage(selectedMultiplayerMode));
+    const created = await lobbyRequest('create', {
+      biome: selectedTrack.track.biomeId,
+      trackId: selectedTrack.track.id,
+      trackSource: selectedTrack.trackSource,
+      serverRegion: 'auto',
+      gameMode: selectedMultiplayerMode,
+    });
+    updatePartyLobby(created.lobby);
+    return { lobby: created.lobby, created: true };
+  })();
+  try {
+    return await partyInvitePartySetup;
+  } finally {
+    partyInvitePartySetup = null;
+  }
+}
+
 async function sendPartyInvite(friend, button) {
   if (!signedInUser) { openAuthModal('signin'); return; }
   button.disabled = true;
   setFriendsMessage(`Inviting ${friend.username}…`);
+  let createdParty = false;
+  let partyCode = '';
   try {
+    const party = await ensureOpenPartyForInvite();
+    createdParty = party.created;
+    partyCode = party.lobby.code;
     const result = await lobbyRequest('invite', { friendId: friend.id });
-    setFriendsMessage(result.message || `Party invitation sent to ${friend.username}.`);
+    if (createdParty) {
+      setFriendsMessage(`Party created and invitation sent to ${friend.username}. Code: ${partyCode}`);
+      setLobbyMessage(`Party created. Invitation sent to ${friend.username}. Share code ${partyCode} with your crew.`);
+      showToast(`Party ready. Invite sent to ${friend.username}.`);
+    } else {
+      setFriendsMessage(result.message || `Party invitation sent to ${friend.username}.`);
+    }
     await refreshFriends();
   } catch (error) {
-    setFriendsMessage(error.message, true);
+    setFriendsMessage(createdParty
+      ? `Party created, but the invitation failed: ${error.message} Code: ${partyCode}`
+      : error.message, true);
   } finally {
     button.disabled = false;
   }
@@ -10728,7 +11410,22 @@ function updatePartyUI(lobby = partyLobby) {
   document.querySelector('#partyLeaveButton').hidden = !partyLobby;
   setLobbyConnectionStatus(partyLobby ? 'CONNECTED' : 'READY');
   const result = partyLobby?.results?.[0];
-  if (result && !flying) setLobbyMessage(result.didNotFinish ? 'Last crew race ended without a finisher.' : `${result.username} won the last crew race in ${(result.timeMs / 1000).toFixed(2)}s.`);
+  if (result && !flying) {
+    const localMember = partyLobby.members.find((member) => member.id === signedInUser?.id);
+    const localRelayResult = partyLobby.gameMode === 'relay-race'
+      ? partyLobby.results.find((teamResult) => teamResult.teamIndex === localMember?.relayTeam)
+      : null;
+    if (localRelayResult) {
+      const winner = partyLobby.results.find((teamResult) => !teamResult.didNotFinish);
+      const won = winner?.teamIndex === localRelayResult.teamIndex;
+      if (!winner) setLobbyMessage('Relay match ended without a finisher. No points or XP awarded.');
+      else setLobbyMessage(won
+        ? `${localRelayResult.username} won. +${Number(localRelayResult.pointsAwarded) || 0} points and +${Number(localRelayResult.xpAwarded) || 0} XP for each pilot.`
+        : `${winner.username} won. +${Number(localRelayResult.pointsAwarded) || 0} points for each pilot.`);
+    } else {
+      setLobbyMessage(result.didNotFinish ? 'Last crew race ended without a finisher.' : `${result.username} won the last crew race in ${(result.timeMs / 1000).toFixed(2)}s.`);
+    }
+  }
   updatePartyDroneStage(partyLobby);
   syncRelayFlightState();
   updateRaceStartOverlay();
@@ -10778,6 +11475,7 @@ function syncRelayFlightState() {
       flight.position.copy(launchPadState.position);
       flight.velocity.set(0, 0, 0);
       flight.acceleration.set(0, 0, 0);
+      resetFlightDamage();
       resetFlightControllerState();
       flight.orientation.setFromAxisAngle(axisY, launchPadState.heading);
       flight.throttle = 0;
@@ -10876,7 +11574,34 @@ function schedulePartyRace(lobby) {
 }
 
 function updatePartyLobby(lobby) {
+  const previousLobbyCode = partyLobby?.code;
+  const previousPropRound = partyLobby?.propHunt?.round || 0;
   if (partyLobby?.code !== lobby?.code) partyFlightSnapshots.clear();
+  if (lobby?.gameMode === 'prop-hunt' && lobby.propHunt?.round && lobby.propHunt.round !== previousPropRound) {
+    scheduledPartyRaceAt = 0;
+    partyRaceFinished = false;
+    partyRacePhase = 'lobby';
+    partyRaceGoUntil = 0;
+    propHuntScanUntil = 0;
+    propHuntScanCooldownUntil = 0;
+    propHuntBurstCooldownUntil = 0;
+    propHuntNoiseAt = 0;
+    propHuntClientState.suspicion = 0;
+    propHuntClientState.pulseEnergy = 100;
+    propHuntClientState.actionStatus = '';
+    propHuntClientState.disguiseType = '';
+    propHuntClientState.lastMoveAt = 0;
+    propHuntLastRoundKey = `${lobby.code}:${lobby.propHunt.round}`;
+  } else if (previousLobbyCode && previousLobbyCode !== lobby?.code) {
+    propHuntRemoteVisuals.forEach((visual) => {
+      propHuntDisguiseRoot.remove(visual.root);
+      propHuntDisguiseRoot.remove(visual.trail);
+      clearChildren(visual.root);
+      visual.trail.geometry.dispose();
+      visual.trail.material.dispose();
+    });
+    propHuntRemoteVisuals.clear();
+  }
   if (lobby?.status === 'open' && lobby.results?.length && ['grid', 'race'].includes(partyRacePhase)) {
     partyRacePhase = 'lobby';
     partyRaceFinished = true;
@@ -10884,8 +11609,14 @@ function updatePartyLobby(lobby) {
   }
   const localMember = lobby?.members.find((member) => member.id === signedInUser?.id);
   const localXp = Number(localMember?.xp);
-  if (signedInUser && Number.isFinite(localXp) && localXp !== Number(signedInUser.xp)) {
-    signedInUser = { ...signedInUser, xp: localXp };
+  const localPoints = Number(localMember?.points);
+  if (signedInUser && ((Number.isFinite(localXp) && localXp !== Number(signedInUser.xp))
+    || (Number.isFinite(localPoints) && localPoints !== Number(signedInUser.points)))) {
+    signedInUser = {
+      ...signedInUser,
+      ...(Number.isFinite(localXp) ? { xp: localXp } : {}),
+      ...(Number.isFinite(localPoints) ? { points: localPoints } : {}),
+    };
     updateAccountUI();
   }
   updatePartyUI(lobby);
@@ -10940,21 +11671,23 @@ function updateRaceStartOverlay() {
   let nextDetail = '';
   const now = Date.now();
   if (activeLobby && partyLobby.status === 'starting' && partyLobby.startAt > now) {
-    nextLabel = 'RACE GRID IN';
+    nextLabel = partyLobby.gameMode === 'prop-hunt' ? 'ROUND GRID IN' : 'RACE GRID IN';
     nextNumber = String(Math.max(1, Math.ceil((partyLobby.startAt - now) / 1000)));
-    nextDetail = `${partyLobby.members.length} PILOTS / FREE FLIGHT`;
+    nextDetail = partyLobby.gameMode === 'prop-hunt'
+      ? `ROUND ${partyLobby.propHunt?.round || 1} / ${partyLobby.propHunt?.totalRounds || 2}`
+      : `${partyLobby.members.length} PILOTS / FREE FLIGHT`;
   } else if (activeLobby && (partyLobby.status === 'grid' || partyRacePhase === 'grid')) {
     const raceAt = Number(partyLobby.raceAt) || Number(partyLobby.startAt) + 5000;
     if (now < raceAt) {
-      nextLabel = 'RACE STARTS IN';
+      nextLabel = partyLobby.gameMode === 'prop-hunt' ? 'ROUND STARTS IN' : 'RACE STARTS IN';
       nextNumber = String(Math.max(1, Math.ceil((raceAt - now) / 1000)));
-      nextDetail = 'HOLD POSITION ON THE PODIUM';
+      nextDetail = partyLobby.gameMode === 'prop-hunt' ? 'HIDERS DEPLOY / HUNTERS HOLD AT SPAWN' : 'HOLD POSITION ON THE PODIUM';
     }
   }
   if (partyRacePhase === 'race' && now < partyRaceGoUntil) {
-    nextLabel = 'RACE';
+    nextLabel = partyLobby?.gameMode === 'prop-hunt' ? 'HIDERS GO' : 'RACE';
     nextNumber = 'GO';
-    nextDetail = 'FLY THE COURSE';
+    nextDetail = partyLobby?.gameMode === 'prop-hunt' ? 'HUNTERS RELEASE IN 60 SECONDS' : 'FLY THE COURSE';
   }
   if (activeLobby && partyLobby.gameMode === 'relay-race' && partyRacePhase === 'race') {
     const member = partyLobby.members.find((candidate) => candidate.id === signedInUser?.id);
@@ -10975,6 +11708,18 @@ function updateRaceStartOverlay() {
       nextLabel = '';
       nextNumber = '';
       nextDetail = '';
+    }
+  }
+  if (partyRaceFinished && partyLobby?.gameMode === 'relay-race' && partyLobby.results?.length) {
+    const localMember = partyLobby.members.find((member) => member.id === signedInUser?.id);
+    const localResult = partyLobby.results.find((result) => result.teamIndex === localMember?.relayTeam);
+    if (localResult) {
+      const won = partyLobby.results[0]?.teamIndex === localResult.teamIndex && !localResult.didNotFinish;
+      const points = Number(localResult.pointsAwarded) || 0;
+      const xp = Number(localResult.xpAwarded) || 0;
+      nextLabel = 'RELAY MATCH COMPLETE';
+      nextNumber = won ? 'WIN' : points ? '2ND' : 'DONE';
+      nextDetail = [points ? `+${points} PTS` : 'NO POINTS', xp ? `+${xp} XP` : ''].filter(Boolean).join(' / ');
     }
   }
   overlay.hidden = !flying || !nextNumber;
@@ -11068,7 +11813,9 @@ function stagePartyRaceGrid(raceAt) {
   setPage('singleplayer');
   enterFlight();
   const seconds = Math.max(1, Math.ceil((raceAt - Date.now()) / 1000));
-  document.querySelector('#flightPrompt').textContent = `ON THE GRID / RACE STARTS IN ${seconds}`;
+  document.querySelector('#flightPrompt').textContent = partyLobby.gameMode === 'prop-hunt'
+    ? `${partyLobby.members[memberIndex]?.propHuntRole?.toUpperCase() || 'PROP HUNT'} / ROUND ${partyLobby.propHunt?.round || 1} / STARTS IN ${seconds}`
+    : `ON THE GRID / RACE STARTS IN ${seconds}`;
   updateRaceStartOverlay();
   updateRaceLeaderboard();
   syncLobbyMusic();
@@ -11080,6 +11827,14 @@ function beginPartyRace(raceAt) {
   partyRacePhase = 'race';
   partyRaceGoUntil = Date.now() + 900;
   if (launchPadState) launchPadState.started = false;
+  if (partyLobby.gameMode === 'prop-hunt') {
+    const member = propHuntLocalMember();
+    document.querySelector('#flightModeLabel').textContent = `PROP HUNT / ${member?.propHuntRole?.toUpperCase() || 'PILOT'}`;
+    document.querySelector('#flightPrompt').textContent = member?.propHuntRole === 'hunter'
+      ? 'WAIT AT SPAWN / HUNTERS RELEASE IN 60 SECONDS'
+      : 'HIDE NOW / HUNTERS RELEASE IN 60 SECONDS';
+    updatePropHuntWorld();
+  }
   updateRaceStartOverlay();
   updateRaceLeaderboard();
   syncLobbyMusic();
@@ -11570,6 +12325,24 @@ function getSavedBuilderGameMode(biomeId) {
 function setBuilderGameMode(mode, biomeId = activeBiome, persist = true) {
   if (!Object.hasOwn(builderGameModeLabels, mode)) return false;
   builderGameMode = mode;
+  if (mode === 'prop-hunt') {
+    const removedIds = new Set(builderProps.filter((prop) => !isPropHuntPlaceableType(prop.type)).map((prop) => prop.id));
+    if (removedIds.size) {
+      if (removedIds.has(selectedBuilderPropId)) {
+        detachBuilderPropTransform();
+        selectedBuilderPropId = null;
+      }
+      for (const object of builderPropObjects.filter((item) => removedIds.has(item.userData.propId))) {
+        builderPropRoot.remove(object);
+        clearChildren(object);
+      }
+      builderProps = builderProps.filter((prop) => !removedIds.has(prop.id));
+      builderPropObjects = builderPropObjects.filter((object) => !removedIds.has(object.userData.propId));
+      builderPlacementHistory = builderPlacementHistory.filter((entry) => !removedIds.has(entry.id));
+    }
+  }
+  normalizeRelayPodiumStartFinishSelection();
+  normalizeBuilderGateSequence();
   const modeSelect = document.querySelector('#builderLaunchMode');
   if (modeSelect) modeSelect.value = mode;
   const modeSummary = document.querySelector('#builderModeSummary');
@@ -11589,6 +12362,11 @@ function updateBuilderAssetLibrary(mode) {
   const propSection = document.querySelector('#builderPropSection');
   const podiumAsset = document.querySelector('[data-builder-prop="podium"]');
   const relayPodiumGateAsset = document.querySelector('[data-builder-prop="relay-podium-gate"]');
+  const catalogButtons = document.querySelectorAll('#builderEnvironmentCatalog [data-builder-prop]');
+  for (const button of catalogButtons) button.hidden = mode === 'prop-hunt' && !isPropHuntPlaceableType(button.dataset.builderProp);
+  for (const category of document.querySelectorAll('#builderEnvironmentCatalog [data-builder-category]')) {
+    category.hidden = mode === 'prop-hunt' && !category.querySelector('[data-builder-prop]:not([hidden])');
+  }
   if (raceGateSection) raceGateSection.hidden = !raceMode;
   if (propSection) propSection.hidden = raceMode;
   if (podiumAsset) podiumAsset.hidden = mode === 'relay-race' || mode === 'prop-hunt';
@@ -11601,7 +12379,7 @@ function updateBuilderAssetLibrary(mode) {
       ? mode === 'relay-race'
         ? activeBuilderAsset.type === 'relay-podium-gate'
         : activeBuilderAsset.type === 'podium'
-      : activeBuilderAsset.type !== 'podium' && activeBuilderAsset.type !== 'relay-podium-gate';
+      : isPropHuntPlaceableType(activeBuilderAsset.type);
   if (assetIsAvailable) return;
 
   selectedGateId = null;
@@ -11615,7 +12393,7 @@ function updateBuilderAssetLibrary(mode) {
     activeBuilderAsset = { kind: 'gate', type: 'neon-square' };
     document.querySelector('#builderPlacementStatus').textContent = 'SELECT A RACE GATE';
   } else {
-    activeBuilderAsset = { kind: 'prop', type: 'container' };
+    activeBuilderAsset = { kind: 'prop', type: 'roadSection' };
     document.querySelector('#builderPlacementStatus').textContent = 'SELECT A PROP OR ENVIRONMENT OBJECT';
   }
   updateBuilderDisplay();
@@ -11711,6 +12489,10 @@ function finishAuthSignIn(result) {
   signedInUser = result.user;
   updatePartyDroneStage();
   updateAccountUI();
+  if (mainMenuChoiceTilesCaptured) {
+    mainMenuChoiceTilesCaptured = false;
+    requestAnimationFrame(captureMenuChoiceTiles);
+  }
   startPartyPolling();
   startFriendsPolling();
   startTeamPolling();
@@ -11803,6 +12585,10 @@ document.querySelector('#signOutButton').addEventListener('click', async () => {
   try { await authRequest('logout', {}); } catch { /* Clear the local signed-in state either way. */ }
   signedInUser = null;
   updateGameChatUI();
+  if (mainMenuChoiceTilesCaptured) {
+    mainMenuChoiceTilesCaptured = false;
+    requestAnimationFrame(captureMenuChoiceTiles);
+  }
   stopFriendsPolling();
   closeFriendsPanel();
   updatePartyLobby(null);
@@ -11819,6 +12605,7 @@ async function restoreSignedInUser() {
   updatePartyDroneStage();
   authSessionReady = true;
   updateAccountUI();
+  requestAnimationFrame(captureMenuChoiceTiles);
   if (signedInUser) {
     startPartyPolling();
     startFriendsPolling();
@@ -11837,6 +12624,7 @@ updateAccountUI();
 restoreSignedInUser();
 
 function setPage(page) {
+  if (page !== 'singleplayer') soloCoursePickerOpen = false;
   if (page === 'trackPicker' && activeBiome !== 'neon-docks') {
     const built = safeApplyBiome('neon-docks', false);
     if (!built || built.id !== 'neon-docks') return;
@@ -11880,17 +12668,19 @@ function setPage(page) {
   root.classList.toggle('is-building', page === 'builder');
   root.classList.toggle('is-environment-overview', page === 'trackPicker');
   document.querySelector('#menu').dataset.page = page;
+  document.querySelector('#menu').classList.toggle('is-solo-course-picker-open', page === 'singleplayer' && soloCoursePickerOpen);
   const settingsButton = document.querySelector('#settingsButton');
   const settingsOpen = page === 'settings';
   settingsButton.setAttribute('aria-pressed', String(settingsOpen));
   settingsButton.setAttribute('aria-label', settingsOpen ? 'Close settings' : 'Open settings');
   settingsButton.title = settingsOpen ? 'Close settings' : 'Settings';
   panels.forEach((panel) => {
-    const active = panel.dataset.panel === page;
+    const active = panel.dataset.panel === page
+      || (page === 'singleplayer' && soloCoursePickerOpen && panel.dataset.panel === 'trackPicker');
     panel.hidden = !active;
     panel.classList.toggle('is-visible', active);
   });
-  if (page === 'trackPicker') requestAnimationFrame(updateTrackPickerPreview);
+  if (page === 'trackPicker' || (page === 'singleplayer' && soloCoursePickerOpen)) requestAnimationFrame(updateTrackPickerPreview);
   navButtons.forEach((button) => button.classList.toggle('is-active', button.dataset.page === page));
   partyDroneRoot.visible = flying ? Boolean(partyLobby && partyLobby.members.length > 1) : page !== 'builder';
   updatePartyDroneStage();
@@ -11904,7 +12694,9 @@ function setPage(page) {
     settings: 'CONFIGURE // FIND YOUR FEEL',
   };
   document.querySelector('#stageKicker').textContent = stageLabels[page] || stageLabels.singleplayer;
-  const selectedMenuPage = page === 'settings' ? pageBeforeSettings : page === 'builder' ? 'builderMenu' : page;
+  const selectedMenuPage = page === 'settings' ? pageBeforeSettings
+    : page === 'builder' ? 'builderMenu'
+      : page === 'singleplayer' && soloCoursePickerOpen ? 'trackPicker' : page;
   document.querySelectorAll('[data-menu-choice]').forEach((button) => {
     const selected = button.dataset.menuChoice === selectedMenuPage;
     button.classList.toggle('is-selected', selected);
@@ -11955,6 +12747,17 @@ function setPage(page) {
   }
 }
 
+function setSoloCoursePickerOpen(open) {
+  if (open && (activeBiome !== 'neon-docks' || builtBiomeId !== 'neon-docks')) {
+    const built = safeApplyBiome('neon-docks', false);
+    if (!built || built.id !== 'neon-docks') return;
+  }
+  soloCoursePickerOpen = Boolean(open);
+  if (soloCoursePickerOpen) showTrackPickerSkyPlatformLabel();
+  setPage('singleplayer');
+  if (!soloCoursePickerOpen) document.querySelector('[data-menu-choice="trackPicker"]').focus({ preventScroll: true });
+}
+
 navButtons.forEach((button) => button.addEventListener('click', () => setPage(button.dataset.page)));
 document.querySelectorAll('[data-menu-choice]').forEach((button) => button.addEventListener('click', () => {
   const choice = button.dataset.menuChoice;
@@ -11962,8 +12765,13 @@ document.querySelectorAll('[data-menu-choice]').forEach((button) => button.addEv
     if (choice === 'multiplayer' && currentPage !== 'multiplayer') setPage('multiplayer');
     return;
   }
+  if (choice === 'trackPicker') {
+    setSoloCoursePickerOpen(!(currentPage === 'singleplayer' && soloCoursePickerOpen));
+    return;
+  }
   setPage(['trackPicker', 'multiplayer', 'builderMenu', 'communityTracks'].includes(choice) && currentPage === choice ? 'singleplayer' : choice);
 }));
+document.querySelector('#closeSoloCoursePicker').addEventListener('click', () => setSoloCoursePickerOpen(false));
 const droneSkinPicker = document.querySelector('#droneSkinPicker');
 const droneShopPanel = document.querySelector('#droneShopPanel');
 const droneSkinStatus = document.querySelector('#droneSkinStatus');
@@ -11996,6 +12804,8 @@ updateDroneCountryPreviews();
 droneCountrySelect.addEventListener('change', () => {
   droneCountryFlagCode = droneCountrySelect.value;
   updateDroneCountryPreviews();
+  applyDroneSkin('country-flag', droneCountryFlagCode);
+  updateDroneSkinPicker();
   saveSettings();
 });
 const updateDroneSkinPicker = () => {
@@ -12186,7 +12996,6 @@ document.querySelector('#deleteBuilderRaceLine').addEventListener('click', () =>
   document.querySelector('#builderPlacementStatus').textContent = 'SELECT OR CHOOSE AN OBJECT';
   invalidateBuilderTrackPicture();
   updateBuilderDisplay();
-  showToast('Race line deleted.');
 });
 
 const keys = new Set();
@@ -12968,13 +13777,16 @@ function orderedRelayStationPodiumObjects(gateEntries, userPodiumObjects) {
   for (const entry of gateEntries.slice(0, RELAY_STATION_COUNT)) {
     entry.object.updateWorldMatrix(true, false);
     const gatePosition = entry.object.getWorldPosition(new THREE.Vector3());
-    let nearestIndex = -1;
+    let nearestIndex = entry.isStartFinish
+      ? availablePodiums.findIndex((podium) => podium.userData.relayStartFinish === true)
+      : -1;
     let nearestDistance = Infinity;
     availablePodiums.forEach((podium, index) => {
       podium.updateWorldMatrix(true, false);
       const position = podium.getWorldPosition(new THREE.Vector3());
       const distance = Math.hypot(gatePosition.x - position.x, gatePosition.z - position.z);
-      if (distance < nearestDistance) {
+      if (index === nearestIndex) nearestDistance = distance;
+      if (nearestIndex < 0 && distance < nearestDistance) {
         nearestDistance = distance;
         nearestIndex = index;
       }
@@ -13111,7 +13923,7 @@ function prepareBuilderTestCourse() {
   const entries = [];
   for (const slot of orderedBuilderGates()) {
     const data = slot.gate;
-    const gate = customGateObjects.find((object) => object.userData.gateId === data.id);
+    const gate = slot.gateObject || customGateObjects.find((object) => object.userData.gateId === data.id);
     if (!gate) continue;
     const indicator = createGateIndicator(gate);
     let centerY = builderGateFlightCenterY;
@@ -13132,14 +13944,19 @@ function prepareBuilderTestCourse() {
     entries.push(entry);
   }
   const startEntry = entries.find((entry) => entry.isStartFinish);
-  if (startEntry) setupRaceLaunchPodium(startEntry, builderFlightRoot, builderPropObjects);
+  if (startEntry) {
+    const launchPodiums = builderGameMode === 'relay-race'
+      ? builderRelayStationPairs().sort((a, b) => a.stationIndex - b.stationIndex).map((pair) => pair.podium)
+      : builderPropObjects;
+    setupRaceLaunchPodium(startEntry, builderFlightRoot, launchPodiums);
+  }
   builderFlightRoot.visible = true;
   trackRoot.visible = false;
   return entries;
 }
 
 function clearBuilderTestCourse() {
-  customGateObjects.forEach((gate) => {
+  [...customGateObjects, ...builderPropObjects].forEach((gate) => {
     (gate.userData.flightIndicators || []).forEach((indicator) => {
       gate.remove(indicator);
       indicator.geometry.dispose();
@@ -13210,6 +14027,27 @@ function prepareFlightCourse() {
     raceTimerStartedAt = 0;
     raceTimerFinishedAt = 0;
     activeFlightCourseName = activeTrack?.name || 'FLIGHT LOBBY';
+    updateCourseProgress(0);
+    updateRaceTimerDisplay();
+    return;
+  }
+  if (partyLobby?.gameMode === 'prop-hunt' && ['grid', 'race'].includes(partyRacePhase)) {
+    builderTestCourse = false;
+    flightCourseLapCount = 1;
+    builderFlightRoot.visible = false;
+    trackRoot.visible = true;
+    flightCourseEntries = [];
+    launchPadState = null;
+    if (generatedTrackLaunchPodium) {
+      trackRoot.remove(generatedTrackLaunchPodium);
+      clearChildren(generatedTrackLaunchPodium);
+      generatedTrackLaunchPodium = null;
+    }
+    clearRepeatCourseIndicators();
+    raceTimerEnabled = false;
+    raceTimerStartedAt = 0;
+    raceTimerFinishedAt = 0;
+    activeFlightCourseName = activeTrack?.name || 'PROP HUNT MAP';
     updateCourseProgress(0);
     updateRaceTimerDisplay();
     return;
@@ -14146,7 +14984,7 @@ function updateTrackIndicators() {
         const localMember = result.lobby.members.find((member) => member.id === signedInUser?.id);
         const team = result.lobby.relayTeams?.[localMember?.relayTeam];
         if (team?.finishedAt) {
-          setLobbyMessage(`Relay team ${team.teamIndex === 0 ? 'Cyan' : 'Coral'} finished in ${(team.lapTimes.reduce((total, lapTime) => total + lapTime, 0) / 1000).toFixed(2)}s. 100 pilot XP awarded to each team member.`);
+          setLobbyMessage(`Relay team ${team.teamIndex === 0 ? 'Cyan' : 'Coral'} finished in ${(team.lapTimes.reduce((total, lapTime) => total + lapTime, 0) / 1000).toFixed(2)}s. Waiting for the other team.`);
         } else if (result.relayTransition?.lapTimeMs) {
           showToast(`Team lap ${result.relayTransition.currentLap - 1} complete / ${(result.relayTransition.lapTimeMs / 1000).toFixed(2)}s.`);
         } else {
@@ -14236,6 +15074,25 @@ async function enterFlight() {
     flight.position.copy(gatePosition).addScaledVector(approachNormal, 9);
     flight.orientation.setFromAxisAngle(axisY, Math.atan2(approachNormal.x, approachNormal.z));
   }
+  if (partyLobby?.gameMode === 'prop-hunt' && ['grid', 'race'].includes(partyRacePhase)) {
+    const member = propHuntLocalMember();
+    const sameRole = partyLobby.members.filter((candidate) => candidate.propHuntRole === member?.propHuntRole);
+    const roleSlot = Math.max(0, sameRole.findIndex((candidate) => candidate.id === signedInUser?.id));
+    const x = (roleSlot - (sameRole.length - 1) / 2) * 8;
+    const z = member?.propHuntRole === 'hider' ? -34 : 34;
+    flight.position.set(x, terrainSurfaceYAt(activeBiome, x, z) + 5.5, z);
+    flight.orientation.setFromAxisAngle(axisY, Math.atan2(-x, -z));
+    const roundKey = `${partyLobby.code}:${partyLobby.propHunt?.round || 1}`;
+    if (roundKey !== propHuntLastRoundKey) {
+      propHuntLastRoundKey = roundKey;
+      propHuntClientState.suspicion = 0;
+      propHuntClientState.pulseEnergy = 100;
+      propHuntNoiseAt = 0;
+    }
+    propHuntClientState.lastPosition.copy(flight.position);
+    propHuntClientState.lastMoveAt = performance.now();
+    propHuntClientState.actionStatus = '';
+  }
   flightSpawnPosition.copy(flight.position);
   flightSpawnOrientation.copy(flight.orientation);
   previousFlightPosition.copy(flight.position);
@@ -14243,24 +15100,32 @@ async function enterFlight() {
   flight.throttle = raceTimerEnabled ? 0 : 0.54;
   flight.speed = 0;
   setCameraFov(fovRange.value);
-  document.querySelector('#flightModeLabel').textContent = selectedMode.toUpperCase();
+  document.querySelector('#flightModeLabel').textContent = partyLobby?.gameMode === 'prop-hunt' && ['grid', 'race'].includes(partyRacePhase)
+    ? `PROP HUNT / ${propHuntLocalMember()?.propHuntRole?.toUpperCase() || 'PILOT'}`
+    : selectedMode.toUpperCase();
   const prompts = { 'Free Flight': 'NO CLOCK. FIND YOUR FLOW.', Freestyle: 'PICK A GAP. MAKE IT YOURS.', Race: 'LINK THE GATES. FIND THE LINE.' };
-  document.querySelector('#flightPrompt').textContent = prompts[selectedMode];
+  document.querySelector('#flightPrompt').textContent = partyLobby?.gameMode === 'prop-hunt' && ['grid', 'race'].includes(partyRacePhase)
+    ? partyLobby.propHunt?.phase === 'hiding'
+      ? propHuntLocalMember()?.propHuntRole === 'hunter' ? 'WAIT AT SPAWN / HUNTERS RELEASE IN 60 SECONDS' : 'HIDE NOW / HUNTERS RELEASE IN 60 SECONDS'
+      : propHuntLocalMember()?.propHuntRole === 'hunter' ? 'SCAN FOR DISTURBANCES / TAG WITH A SHORT RANGE PULSE' : 'STAY DISGUISED / MOVE BEFORE YOUR SUSPICION SPIKES'
+    : prompts[selectedMode];
   updateCourseProgress(0);
   updateRaceTimerDisplay();
   keys.clear();
   window.focus();
   refreshGamepadList();
+  updatePropHuntHUD();
 }
 
 function exitFlight() {
   if (!flying) return;
   hideRaceFinishLeaderboard();
   const leaveWaitingLobby = partyRacePhase === 'waiting' && partyLobby?.status === 'open';
-  if (leaveWaitingLobby) {
+  const leavePropHuntMatch = partyLobby?.gameMode === 'prop-hunt' && ['starting', 'grid', 'racing'].includes(partyLobby.status);
+  if (leaveWaitingLobby || leavePropHuntMatch) {
     partyRaceFinished = true;
     void lobbyRequest('leave').then(() => updatePartyLobby(null)).catch((error) => setLobbyMessage(error.message, true));
-  } else {
+  } else if (!partyRaceFinished) {
     void finishCrewRace(true);
   }
   if (menuDroneTransformSaved) {
@@ -14322,9 +15187,10 @@ function activateMenuChoice() {
     void quickMatchParty();
   } else if (currentPage === 'builderMenu') {
     document.querySelector('#openTrackBuilder').click();
-  } else if (currentPage === 'trackPicker') {
-    selectedMode = 'Race';
-    enterFlight();
+  } else if (currentPage === 'trackPicker' || (currentPage === 'singleplayer' && soloCoursePickerOpen)) {
+    document.querySelector('#trackPickerDone').click();
+  } else if (currentPage === 'singleplayer') {
+    setSoloCoursePickerOpen(true);
   } else {
     setPage('trackPicker');
   }
@@ -14346,6 +15212,23 @@ flightMainMenuButton.addEventListener('click', () => {
 
 function normalizeBuilderGateSequence(startFinishId = null, startFinishOpeningIndex = null) {
   if (!builderGates.length) return;
+  if (builderGameMode === 'relay-race') {
+    builderGates.forEach((gate) => {
+      gate.isStartFinish = false;
+      if (Array.isArray(gate.entryStartFinish)) gate.entryStartFinish.fill(false);
+    });
+    const checkpoints = builderGateRouteSlots().filter((slot) => slot.routeOrder > 0)
+      .sort((a, b) => a.routeOrder - b.routeOrder);
+    checkpoints.forEach((slot, index) => setBuilderGateRouteSlotOrder(slot, index + 1));
+    builderGates.forEach((gate) => {
+      const object = customGateObjects.find((item) => item.userData.gateId === gate.id);
+      if (object) {
+        object.userData.gateData = gate;
+        updateBuilderGateBadge(object, gate);
+      }
+    });
+    return;
+  }
   const slots = builderGateRouteSlots();
   const previousStartFinish = slots.find((slot) => slot.isStartFinish);
   const requestedStartFinish = startFinishId
@@ -14393,6 +15276,12 @@ function normalizeBuilderGateSequence(startFinishId = null, startFinishOpeningIn
 
 function orderedBuilderGates() {
   const slots = builderGateRouteSlots();
+  if (builderGameMode === 'relay-race') {
+    const startFinish = builderRelayStartFinishRouteSlot();
+    const checkpoints = slots.filter((slot) => slot.routeOrder > 0)
+      .sort((a, b) => a.routeOrder - b.routeOrder);
+    return [...(startFinish ? [startFinish] : []), ...checkpoints];
+  }
   if (!slots.length) return [];
   const startFinish = slots.find((slot) => slot.isStartFinish) || slots[0];
   const checkpoints = slots.filter((slot) => slot !== startFinish && slot.routeOrder > 0)
@@ -14400,9 +15289,17 @@ function orderedBuilderGates() {
   return [startFinish, ...checkpoints];
 }
 
-function updateRelayPodiumGateIndicator(propObject, routeSlot, gateObject, stationIndex) {
+function setRelayPodiumGateIndicatorSelected(indicator, selected) {
+  indicator.userData.isSelected = selected;
+  indicator.userData.frontPanel.material.opacity = selected ? 0.56 : 0.3;
+  indicator.userData.backPanel.material.opacity = selected ? 0.56 : 0.3;
+  indicator.userData.numberBadges.forEach((badge) => badge.scale.setScalar(selected ? 1.12 : 1));
+}
+
+function updateRelayPodiumGateIndicator(propObject, routeSlot, gateObject, stationIndex, selected = false) {
   const indicator = propObject.userData.relayPodiumGateIndicator;
   if (!indicator || !routeSlot || !gateObject) return;
+  setRelayPodiumGateIndicatorSelected(indicator, selected);
   const openingIndex = Number.isInteger(routeSlot.openingIndex) ? routeSlot.openingIndex : 0;
   const gateData = routeSlot.gate;
   const entryDirection = gateData.entryDirections?.[openingIndex] ?? gateData.entryDirection ?? 1;
@@ -14444,7 +15341,9 @@ function updateRelayPodiumGateIndicator(propObject, routeSlot, gateObject, stati
   frontPanel.material.color.setHex(frontIsEntry ? gateBoundaryCorrectColor : gateBoundaryWrongColor);
   backPanel.material.color.setHex(frontIsEntry ? gateBoundaryWrongColor : gateBoundaryCorrectColor);
 
-  const label = routeSlot.isStartFinish ? 'S / F' : String(stationIndex).padStart(2, '0');
+  const label = routeSlot.isStartFinish
+    ? 'S / F'
+    : routeSlot.routeOrder > 0 ? String(routeSlot.routeOrder).padStart(2, '0') : 'N/A';
   for (const badge of indicator.userData.numberBadges) {
     const isEntrySide = badge.userData.badgeSide === 'front' ? frontIsEntry : !frontIsEntry;
     if (badge.userData.displayLabel !== label || badge.userData.isEntrySide !== isEntrySide) {
@@ -14467,6 +15366,7 @@ function updateBuilderRelayPodiumGateIndicators() {
       indicator.userData.paired = false;
       indicator.userData.showInBuilder = showInBuilder;
       indicator.visible = showInBuilder;
+      setRelayPodiumGateIndicatorSelected(indicator, false);
       const fallbackLabel = String(index + 1).padStart(2, '0');
       indicator.userData.numberBadges.forEach((badge) => {
         const isEntrySide = badge.userData.badgeSide === 'front';
@@ -14480,27 +15380,42 @@ function updateBuilderRelayPodiumGateIndicators() {
   });
   if (!showInBuilder || !relayPodiums.length) return;
 
-  const availablePodiums = relayPodiums.slice();
-  const stations = orderedBuilderGates().slice(0, RELAY_STATION_COUNT);
-  stations.forEach((routeSlot, stationIndex) => {
-    const gateObject = customGateObjects.find((object) => object.userData.gateId === routeSlot.gate.id);
-    if (!gateObject || !availablePodiums.length) return;
-    gateObject.updateWorldMatrix(true, false);
-    const gatePosition = gateObject.getWorldPosition(new THREE.Vector3());
-    let nearestIndex = -1;
-    let nearestDistance = Infinity;
-    availablePodiums.forEach((podium, index) => {
-      podium.updateWorldMatrix(true, false);
-      const position = podium.getWorldPosition(new THREE.Vector3());
-      const distance = Math.hypot(gatePosition.x - position.x, gatePosition.z - position.z);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
-    });
-    if (nearestIndex < 0 || nearestDistance > RELAY_GATE_PODIUM_DISTANCE) return;
-    const podium = availablePodiums.splice(nearestIndex, 1)[0];
-    updateRelayPodiumGateIndicator(podium, routeSlot, gateObject, stationIndex);
+  const pairedPodiumIds = new Set();
+  builderRelayStationPairs().forEach(({ routeSlot, stationIndex, podium, gateObject: pairedGateObject }) => {
+    const gateObject = pairedGateObject || customGateObjects.find((object) => object.userData.gateId === routeSlot.gate.id);
+    if (!gateObject) return;
+    pairedPodiumIds.add(podium.userData.propId);
+    const hasMultipleOpenings = builderGateRouteOpeningCount(routeSlot.gate) > 1;
+    const selected = routeSlot.isRelayPodiumGate
+      ? selectedBuilderPropId === podium.userData.propId
+      : selectedGateId === routeSlot.gate.id
+        && (!hasMultipleOpenings || selectedGateOpeningIndex === routeSlot.openingIndex);
+    updateRelayPodiumGateIndicator(podium, routeSlot, gateObject, stationIndex, selected);
+  });
+
+  let checkpointNumber = 0;
+  relayPodiums.forEach((podium, index) => {
+    if (pairedPodiumIds.has(podium.userData.propId)) return;
+    const prop = builderProps.find((item) => item.id === podium.userData.propId);
+    const gateData = podium.userData.gateData;
+    if (!prop || !gateData) return;
+    const isStartFinish = prop.relayStartFinish === true;
+    if (!isStartFinish) checkpointNumber += 1;
+    const routeSlot = {
+      ...gateData,
+      gate: gateData,
+      openingIndex: null,
+      isStartFinish,
+      routeOrder: isStartFinish ? 0 : checkpointNumber,
+      isRelayPodiumGate: true,
+    };
+    updateRelayPodiumGateIndicator(
+      podium,
+      routeSlot,
+      podium,
+      index,
+      selectedBuilderPropId === podium.userData.propId,
+    );
   });
 }
 
@@ -14713,7 +15628,9 @@ function builderRaceLineLaunchPoint() {
 }
 
 function builderRaceLineGatePlaneObstacles() {
-  return customGateObjects.flatMap((object) => {
+  const relayStartFinishGate = builderRelayStartFinishRouteSlot()?.gateObject;
+  const gateObjects = [...customGateObjects, ...(relayStartFinishGate ? [relayStartFinishGate] : [])];
+  return gateObjects.flatMap((object) => {
     const data = object.userData.gateData;
     const planes = object.userData.gatePassPlanes || [];
     object.updateWorldMatrix(true, false);
@@ -14931,7 +15848,7 @@ function refreshBuilderRaceLineGeometry() {
 
 function generateBuilderRaceLine() {
   const route = orderedBuilderGates().map((slot) => {
-    const object = customGateObjects.find((candidate) => candidate.userData.gateId === slot.gate.id);
+    const object = slot.gateObject || customGateObjects.find((candidate) => candidate.userData.gateId === slot.gate.id);
     if (!object) return null;
     object.updateWorldMatrix(true, false);
     const firstGreenOpening = slot.gate.entryDirections?.findIndex((direction) => direction !== 0) ?? -1;
@@ -14974,7 +15891,6 @@ function generateBuilderRaceLine() {
   document.querySelector('#builderPlacementStatus').textContent = 'RACE LINE / SELECT A POINT TO MOVE';
   invalidateBuilderTrackPicture();
   updateBuilderDisplay();
-  showToast('Race line generated. Click a glowing point to move that part of the route.');
 }
 
 function setBuilderGateRouteNumber(selected, requestedNumber, openingIndex = null) {
@@ -15001,12 +15917,16 @@ function updateBuilderDisplay() {
   const relayMode = builderGameMode === 'relay-race';
   const podiumCount = relayMode ? builderRelayPodiumGateCount() : builderPodiumCount();
   const routeSlots = builderGateRouteSlots();
+  const countedRouteSlots = orderedBuilderGates();
   updateBuilderRelayPodiumGateIndicators();
-  const hasStartFinish = routeSlots.some((slot) => slot.isStartFinish);
-  const countedGateCount = routeSlots.filter((slot) => slot.isStartFinish || slot.routeOrder > 0).length;
+  updateBuilderGateBadgeSelection();
+  const hasStartFinish = countedRouteSlots.some((slot) => slot.isStartFinish);
+  const countedGateCount = countedRouteSlots.length;
   document.querySelector('#gateCount').textContent = `${String(countedGateCount).padStart(2, '0')} GATES / ${String(builderProps.length).padStart(2, '0')} OBJECTS`;
   const podiumRequirement = builderGameMode === 'relay-race' ? RELAY_STATION_COUNT : REQUIRED_TRACK_PODIUM_COUNT;
-  document.querySelector('#builderSummary').textContent = `${podiumCount}/${podiumRequirement} ${relayMode ? 'RELAY PODIUMS' : 'PODIUMS'} / ${hasStartFinish ? 'START SET' : 'START NEEDED'}`;
+  document.querySelector('#builderSummary').textContent = builderGameMode === 'prop-hunt'
+    ? `PROP HUNT MAP / ${builderProps.length} HIDE PROPS`
+    : `${podiumCount}/${podiumRequirement} ${relayMode ? 'RELAY PODIUMS' : 'PODIUMS'} / ${hasStartFinish ? 'START SET' : 'START NEEDED'}`;
   const podiumAssetDescription = document.querySelector('[data-builder-prop="podium"] small');
   if (podiumAssetDescription) podiumAssetDescription.textContent = `${REQUIRED_TRACK_PODIUM_COUNT} required`;
   const relayPodiumGateDescription = document.querySelector('[data-builder-prop="relay-podium-gate"] small');
@@ -15034,8 +15954,8 @@ function updateBuilderDisplay() {
   routeNumberLabel.textContent = selectedHasMultipleOpenings && selectedGateOpeningIndex !== null
     ? `${builderGateOpeningLabel(selected, selectedGateOpeningIndex).toUpperCase()} ROUTE NUMBER (0 = N/A)`
     : 'ROUTE NUMBER (0 = N/A)';
-  startFinishControl.hidden = !selected || selectedGateOpeningIndex === null;
-  startFinishInput.disabled = !selectedRouteSlot;
+  startFinishControl.hidden = builderGameMode === 'relay-race' || !selected || selectedGateOpeningIndex === null;
+  startFinishInput.disabled = builderGameMode === 'relay-race' || !selectedRouteSlot;
   startFinishInput.checked = selectedIsStartFinish;
   const startFinishText = startFinishControl.querySelector('b');
   startFinishText.textContent = selectedHasMultipleOpenings && selectedGateOpeningIndex !== null
@@ -15047,6 +15967,15 @@ function updateBuilderDisplay() {
   const launchOption = document.querySelector('#builderLaunchPodiumOption');
   launchOption.hidden = selectedProp?.type !== 'podium';
   document.querySelector('#builderPropLaunch').checked = Boolean(selectedProp?.isLaunchPodium);
+  const relayStartFinishOption = document.querySelector('#builderRelayStartFinishOption');
+  const relayStartFinishInput = document.querySelector('#builderRelayStartFinish');
+  const selectedRelayPair = selectedProp?.type === 'relay-podium-gate'
+    ? builderRelayStationPairs().find((pair) => pair.podium.userData.propId === selectedProp.id)
+    : null;
+  relayStartFinishOption.hidden = !relayMode || selectedProp?.type !== 'relay-podium-gate';
+  relayStartFinishInput.disabled = !relayMode || selectedProp?.type !== 'relay-podium-gate';
+  relayStartFinishInput.dataset.propId = selectedProp?.type === 'relay-podium-gate' ? selectedProp.id : '';
+  relayStartFinishInput.checked = Boolean(selectedProp?.relayStartFinish || selectedRelayPair?.routeSlot.isStartFinish);
   if (selectedProp) {
     document.querySelector('#selectedPropName').textContent = `${builderPropTypes[selectedProp.type]} environment object`;
   } else if (selectedEnvironmentBuilding) {
@@ -15251,7 +16180,7 @@ function selectGateType(type) {
 
 function selectBuilderProp(type) {
   const available = builderGameMode === 'prop-hunt'
-    ? type !== 'podium' && type !== 'relay-podium-gate'
+    ? isPropHuntPlaceableType(type)
     : builderGameMode === 'relay-race'
       ? type === 'relay-podium-gate'
       : type === 'podium';
@@ -15396,8 +16325,10 @@ function placeBuilderGate(position) {
     scaleY: 1,
     scaleZ: 1,
     color: palette[builderGates.length % palette.length] || 'cyan',
-    isStartFinish: builderGates.length === 0,
-    routeOrder: builderGates.length === 0 ? 0 : builderGateRouteSlots().filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length + 1,
+    isStartFinish: builderGameMode !== 'relay-race' && builderGates.length === 0,
+    routeOrder: builderGameMode === 'relay-race'
+      ? builderGateRouteSlots().filter((slot) => slot.routeOrder > 0).length + 1
+      : builderGates.length === 0 ? 0 : builderGateRouteSlots().filter((slot) => !slot.isStartFinish && slot.routeOrder > 0).length + 1,
   };
   builderGates.push(data);
   customGateObjects.push(createBuilderGate(data));
@@ -15411,6 +16342,7 @@ function placeBuilderGate(position) {
 }
 
 function placeBuilderProp(position) {
+  if (builderGameMode === 'prop-hunt' && !isPropHuntPlaceableType(activeBuilderAsset.type)) return;
   if (builderProps.length >= 100) return showToast('This environment has reached the 100 object limit.');
   if (activeBuilderAsset.type === 'relay-podium-gate' && builderRelayPodiumGateCount() >= RELAY_STATION_COUNT) {
     showToast('This Relay track already has all 4 podium gates.');
@@ -15433,9 +16365,12 @@ function placeBuilderProp(position) {
     scaleY: 1,
     scaleZ: 1,
     isLaunchPodium: activeBuilderAsset.type === 'podium' && !builderProps.some((prop) => prop.isLaunchPodium),
+    relayStartFinish: false,
+    relayEntryDirection: 1,
   };
   builderProps.push(data);
   builderPropObjects.push(createBuilderPropObject(data));
+  normalizeRelayPodiumStartFinishSelection();
   builderPlacementHistory.push({ kind: 'prop', id: data.id });
   gatePlacementArmed = false;
   builderGhostRoot.visible = false;
@@ -15459,7 +16394,6 @@ function copySelectedBuilderObject() {
   else if (prop) builderObjectClipboard = { kind: 'prop', data: { ...prop } };
   else return false;
   builderClipboardPasteCount = 0;
-  showToast('Selected object copied. Press Ctrl+V to paste a duplicate.');
   return true;
 }
 
@@ -15497,7 +16431,7 @@ function pasteBuilderObject() {
   if (kind === 'prop' && (
     (builderGameMode === 'relay-race' && source.type !== 'relay-podium-gate')
     || (builderGameMode !== 'relay-race' && source.type === 'relay-podium-gate')
-    || (builderGameMode === 'prop-hunt' && ['podium', 'relay-podium-gate'].includes(source.type))
+    || (builderGameMode === 'prop-hunt' && !isPropHuntPlaceableType(source.type))
   )) {
     showToast('This object is not available in the selected game mode.');
     return false;
@@ -15535,9 +16469,12 @@ function pasteBuilderObject() {
       y: Math.round(builderSurfaceYAt(position.x, position.z) * 4) / 4,
       z: position.z,
       isLaunchPodium: false,
+      relayStartFinish: false,
+      relayEntryDirection: 1,
     };
     builderProps.push(data);
     builderPropObjects.push(createBuilderPropObject(data));
+    normalizeRelayPodiumStartFinishSelection();
     builderPlacementHistory.push({ kind: 'prop', id });
     invalidateBuilderTrackPicture();
     selectedGateId = null;
@@ -15551,7 +16488,6 @@ function pasteBuilderObject() {
     }
   }
   updateBuilderDisplay();
-  showToast('Object pasted.');
   return true;
 }
 
@@ -15641,6 +16577,86 @@ function builderGateBadgeAtPointer(event) {
     : null;
 }
 
+function selectGateIndicatorTargetIfNeeded(gateObject, openingIndex) {
+  const data = gateObject?.userData.gateData;
+  if (!data) return false;
+  const targetOpeningIndex = openingIndex ?? 0;
+  const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
+  const targetAlreadySelected = selectedGateId === data.id
+    && (!hasMultipleOpenings || selectedGateOpeningIndex === targetOpeningIndex);
+  if (targetAlreadySelected) return false;
+  selectBuilderGate(data.id);
+  selectedGateOpeningIndex = targetOpeningIndex;
+  gatePlacementArmed = false;
+  builderGhostRoot.visible = false;
+  updateBuilderDisplay();
+  return true;
+}
+
+function focusBuilderGateNumber(gateObject, openingIndex, showUnavailableMessage = false) {
+  if (!selectGateIndicatorTargetIfNeeded(gateObject, openingIndex)) {
+    selectedGateOpeningIndex = openingIndex ?? 0;
+    updateBuilderDisplay();
+  }
+  const routeNumberInput = document.querySelector('#gateRouteNumber');
+  if (routeNumberInput.disabled) {
+    if (showUnavailableMessage && !document.querySelector('#gateStartFinish').checked) {
+      showToast('Show this gate with its colored panel before assigning a route number.');
+    }
+    return false;
+  }
+  routeNumberInput.focus({ preventScroll: true });
+  routeNumberInput.select();
+  return true;
+}
+
+function builderRouteNumberBadgeAtPointer(event) {
+  const badgeGate = builderGateBadgeAtPointer(event);
+  if (badgeGate) {
+    return {
+      gate: badgeGate.gate,
+      openingIndex: badgeGate.openingIndex,
+      key: `${badgeGate.gate.userData.gateId}:${badgeGate.openingIndex ?? 0}`,
+    };
+  }
+  const relayHit = builderRelayPodiumIndicatorAtPointer(event);
+  if (!relayHit?.isNumberBadge) return null;
+  const pair = builderRelayStationPairs().find((station) => station.podium.userData.propId === relayHit.podium.userData.propId);
+  if (!pair || pair.routeSlot.isRelayPodiumGate) return null;
+  return {
+    gate: pair.gateObject,
+    openingIndex: pair.routeSlot.openingIndex,
+    key: `${pair.routeSlot.gate.id}:${pair.routeSlot.openingIndex ?? 0}`,
+  };
+}
+
+function builderRelayPodiumIndicatorAtPointer(event) {
+  if (!setBuilderRayFromEvent(event)) return null;
+  const localIndicatorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -0.2);
+  const worldIndicatorPlane = localIndicatorPlane.clone();
+  const worldHit = new THREE.Vector3();
+  let nearestHit = null;
+  let nearestDistance = Infinity;
+  for (const podium of builderPropObjects) {
+    if (podium.userData.propType !== 'relay-podium-gate') continue;
+    const indicator = podium.userData.relayPodiumGateIndicator;
+    if (!indicator?.visible) continue;
+    podium.updateWorldMatrix(true, true);
+    worldIndicatorPlane.copy(localIndicatorPlane).applyMatrix4(podium.matrixWorld);
+    if (!builderRaycaster.ray.intersectPlane(worldIndicatorPlane, worldHit)) continue;
+    const localHit = podium.worldToLocal(worldHit.clone());
+    if (Math.abs(localHit.x) > 9.2 || Math.abs(localHit.y - 9.075) > 5.675) continue;
+    const distance = builderRaycaster.ray.origin.distanceTo(worldHit);
+    if (distance >= nearestDistance) continue;
+    nearestDistance = distance;
+    nearestHit = {
+      podium,
+      isNumberBadge: Math.abs(localHit.x) <= 5.2 && Math.abs(localHit.y - 9.075) <= 2.6,
+    };
+  }
+  return nearestHit;
+}
+
 function builderPropAtPointer(event) {
   if (!setBuilderRayFromEvent(event)) return null;
   const hitProp = builderRaycaster.intersectObjects(builderPropObjects, true)[0]?.object;
@@ -15681,6 +16697,41 @@ function builderEnvironmentBuildingAtPointer(event) {
   return null;
 }
 
+function cycleBuilderGateDirection(gate, openingIndex) {
+  const data = gate?.userData.gateData;
+  if (!data) return;
+  if (data.type === 'relay-podium-gate') {
+    const podium = builderProps.find((prop) => prop.id === data.id);
+    const nextDirection = data.entryDirection === -1 ? 1 : -1;
+    if (podium) podium.relayEntryDirection = nextDirection;
+    data.entryDirection = nextDirection;
+    data.entryDirections = [nextDirection];
+    updateBuilderDisplay();
+    invalidateBuilderTrackPicture();
+    return;
+  }
+  const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
+  const previousDirection = data.entryDirections[openingIndex] ?? 1;
+  const nextDirection = previousDirection === 1 ? -1 : previousDirection === -1 ? 0 : 1;
+  data.entryDirections[openingIndex] = nextDirection;
+  data.entryDirection = data.entryDirections[0];
+  updateGatePassBoundaryDirection(gate);
+  const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id
+    && item.openingIndex === (hasMultipleOpenings ? openingIndex : null));
+  const allOpeningsHidden = data.entryDirections.every((direction) => direction === 0);
+  if (slot && !slot.isStartFinish && nextDirection === 0) {
+    setBuilderGateRouteNumber(data, 0, slot.openingIndex);
+  } else if (slot && !slot.isStartFinish && previousDirection === 0 && nextDirection !== 0) {
+    const nextNumber = builderGateRouteSlots().filter((item) => item.routeOrder > 0 && !item.isStartFinish).length + 1;
+    setBuilderGateRouteNumber(data, nextNumber, slot.openingIndex);
+  } else {
+    updateBuilderDisplay();
+    invalidateBuilderTrackPicture();
+  }
+  const routeNumberInput = document.querySelector('#gateRouteNumber');
+  if (!routeNumberInput.disabled) routeNumberInput.focus({ preventScroll: true });
+}
+
 function builderGroundAtPointer(event) {
   if (!setBuilderRayFromEvent(event)) return null;
   let groundY = builderSurfaceYAt(orbit.target.x, orbit.target.z);
@@ -15711,24 +16762,90 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     return;
   }
+  const relayIndicatorHit = builderRelayPodiumIndicatorAtPointer(event);
+  if (relayIndicatorHit) {
+    const podiumPropId = relayIndicatorHit.podium.userData.propId;
+    const pair = builderRelayStationPairs().find((station) => station.podium.userData.propId === podiumPropId);
+    if (pair) {
+      const { routeSlot } = pair;
+      if (routeSlot.isRelayPodiumGate) {
+        if (selectedBuilderPropId !== podiumPropId || selectedGateId) {
+          detachBuilderPropTransform();
+          selectedGateId = null;
+          selectedGateOpeningIndex = null;
+          selectedEnvironmentBuildingId = null;
+          selectedBuilderPropId = podiumPropId;
+          builderSelectionHelper.setFromObject(pair.gateObject);
+          builderSelectionHelper.visible = true;
+          attachBuilderPropTransform(pair.gateObject);
+          gatePlacementArmed = false;
+          builderGhostRoot.visible = false;
+          updateBuilderDisplay();
+        }
+        if (!relayIndicatorHit.isNumberBadge) cycleBuilderGateDirection(pair.gateObject, 0);
+      } else if (selectGateIndicatorTargetIfNeeded(pair.gateObject, routeSlot.openingIndex)) {
+        if (!relayIndicatorHit.isNumberBadge) {
+          builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+          orbit.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+      }
+      if (!routeSlot.isRelayPodiumGate) {
+        selectedGateOpeningIndex = routeSlot.openingIndex ?? 0;
+        if (relayIndicatorHit.isNumberBadge) {
+          focusBuilderGateNumber(pair.gateObject, routeSlot.openingIndex, true);
+        } else {
+          updateBuilderDisplay();
+          cycleBuilderGateDirection(pair.gateObject, routeSlot.openingIndex ?? 0);
+        }
+      }
+      builderPointerDown = {
+        x: event.clientX,
+        y: event.clientY,
+        kind: !routeSlot.isRelayPodiumGate && relayIndicatorHit.isNumberBadge ? 'badge' : 'select',
+        activeNumberBadgeKey: !routeSlot.isRelayPodiumGate && relayIndicatorHit.isNumberBadge
+          ? `${routeSlot.gate.id}:${routeSlot.openingIndex ?? 0}`
+          : null,
+        objectId: null,
+        moved: false,
+      };
+      orbit.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    selectedGateId = null;
+    selectedGateOpeningIndex = null;
+    selectedEnvironmentBuildingId = null;
+    detachBuilderPropTransform();
+    selectedBuilderPropId = podiumPropId;
+    builderSelectionHelper.setFromObject(relayIndicatorHit.podium);
+    builderSelectionHelper.visible = true;
+    attachBuilderPropTransform(relayIndicatorHit.podium);
+    gatePlacementArmed = false;
+    builderGhostRoot.visible = false;
+    if (!relayIndicatorHit.isNumberBadge) cycleBuilderGateDirection(relayIndicatorHit.podium, 0);
+    builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+    orbit.enabled = false;
+    renderer.domElement.setPointerCapture(event.pointerId);
+    updateBuilderDisplay();
+    event.preventDefault();
+    return;
+  }
   const badgeGate = builderGateBadgeAtPointer(event);
   if (badgeGate) {
-    const data = badgeGate.gate.userData.gateData;
     const openingIndex = badgeGate.openingIndex;
-    const hasMultipleOpenings = builderGateRouteOpeningCount(data) > 1;
-    const slot = builderGateRouteSlots().find((item) => item.gate.id === data.id && item.openingIndex === (hasMultipleOpenings ? openingIndex : null));
-    if (slot && !slot.isStartFinish) {
-      const numberedCount = builderGateRouteSlots().filter((item) => !item.isStartFinish && item.routeOrder > 0).length;
-      const nextNumber = slot.routeOrder > 0 && slot.routeOrder < numberedCount
-        ? slot.routeOrder + 1
-        : slot.routeOrder > 0 ? 0 : 1;
-      setBuilderGateRouteNumber(data, nextNumber, slot.openingIndex);
-      showToast(nextNumber === 0 ? 'Gate set to N/A and removed from the race route.' : `Gate number set to ${nextNumber}.`);
-    }
-    selectBuilderGate(data.id);
-    selectedGateOpeningIndex = openingIndex ?? 0;
-    updateBuilderDisplay();
-    builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+    focusBuilderGateNumber(badgeGate.gate, openingIndex, true);
+    builderPointerDown = {
+      x: event.clientX,
+      y: event.clientY,
+      kind: 'badge',
+      activeNumberBadgeKey: `${badgeGate.gate.userData.gateId}:${openingIndex ?? 0}`,
+      objectId: null,
+      moved: false,
+    };
     orbit.enabled = false;
     renderer.domElement.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -15738,8 +16855,15 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   if (boundaryHit) {
     const { gate, openingIndex } = boundaryHit;
     const data = gate.userData.gateData;
-    selectBuilderGate(data.id);
+    if (selectGateIndicatorTargetIfNeeded(gate, openingIndex)) {
+      builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
+      orbit.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
     selectedGateOpeningIndex = openingIndex ?? 0;
+    updateBuilderDisplay();
     if (builderGateRouteOpeningCount(data) > 1) {
       const previousDirection = data.entryDirections[openingIndex] ?? 1;
       const nextDirection = previousDirection === 1 ? -1 : previousDirection === -1 ? 0 : 1;
@@ -15756,10 +16880,6 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
         invalidateBuilderTrackPicture();
       }
       document.querySelector('#gateRouteNumber').focus({ preventScroll: true });
-      const directionMessage = nextDirection === 0
-        ? 'invisible'
-        : nextDirection === 1 ? 'green from the front' : 'green from the back';
-      showToast(`Gate ${openingIndex + 1} direction: ${directionMessage}${nextDirection === 0 ? '. Gate set to N/A.' : '.'}`);
       builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
       orbit.enabled = false;
       renderer.domElement.setPointerCapture(event.pointerId);
@@ -15772,9 +16892,6 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     data.entryDirection = data.entryDirections[0];
     updateGatePassBoundaryDirection(gate);
     const allOpeningsHidden = data.entryDirections.every((direction) => direction === 0);
-    const directionMessage = nextDirection === 0
-      ? 'invisible'
-      : nextDirection === 1 ? 'green from the front' : 'green from the back';
     const routeSlot = builderGateRouteSlots().find((slot) => slot.gate.id === data.id && slot.openingIndex === null);
     if (!routeSlot?.isStartFinish && allOpeningsHidden && Number(data.routeOrder) > 0) {
       setBuilderGateRouteNumber(data, 0);
@@ -15785,7 +16902,6 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       invalidateBuilderTrackPicture();
     }
     document.querySelector('#gateRouteNumber').focus({ preventScroll: true });
-    showToast(`Gate ${openingIndex + 1} direction: ${directionMessage}${allOpeningsHidden && !routeSlot?.isStartFinish ? '. Gate set to N/A.' : '.'}`);
     builderPointerDown = { x: event.clientX, y: event.clientY, kind: 'select', objectId: null, moved: false };
     orbit.enabled = false;
     renderer.domElement.setPointerCapture(event.pointerId);
@@ -15834,6 +16950,8 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   builderPointerDown = { x: event.clientX, y: event.clientY, kind: gateObject ? 'gate' : null, objectId, moved: false };
   if (!gateObject) return;
   selectBuilderGate(objectId);
+  selectedGateOpeningIndex = 0;
+  updateBuilderDisplay();
   gatePlacementArmed = false;
   builderGhostRoot.visible = false;
   builderDragPlane.constant = -gateObject.position.y;
@@ -15849,6 +16967,15 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   if (currentPage !== 'builder') return;
   if (builderTransformControls.dragging) return;
   if (!drag?.objectId) {
+    if (drag?.kind === 'badge' && (event.buttons & 1) !== 0) {
+      const badgeTarget = builderRouteNumberBadgeAtPointer(event);
+      if (badgeTarget && badgeTarget.key !== drag.activeNumberBadgeKey) {
+        drag.activeNumberBadgeKey = badgeTarget.key;
+        focusBuilderGateNumber(badgeTarget.gate, badgeTarget.openingIndex);
+        event.preventDefault();
+      }
+      return;
+    }
     if (gatePlacementArmed) {
       const hit = builderGroundAtPointer(event);
       if (hit) updateBuilderGhostPosition(hit);
@@ -15876,7 +17003,7 @@ function finishBuilderPointer(event) {
   const interaction = builderPointerDown;
   builderPointerDown = null;
   if (!interaction) return;
-  if (interaction.kind === 'select') {
+  if (interaction.kind === 'select' || interaction.kind === 'badge') {
     orbit.enabled = currentPage === 'builder' && !builderTransformControls.dragging;
     return;
   }
@@ -15954,6 +17081,7 @@ function updateSelectedGateRouteNumber() {
 }
 
 function updateSelectedGateStartFinish() {
+  if (builderGameMode === 'relay-race') return;
   const selected = builderGates.find((gate) => gate.id === selectedGateId);
   const hasMultipleOpenings = selected && builderGateRouteOpeningCount(selected) > 1;
   const selectedSlot = builderGateRouteSlots().find((slot) => slot.gate.id === selected?.id
@@ -15984,10 +17112,30 @@ function updateSelectedLaunchPodium() {
   updateBuilderDisplay();
 }
 
+function updateSelectedRelayPodiumStartFinish() {
+  const input = document.querySelector('#builderRelayStartFinish');
+  if (builderGameMode !== 'relay-race' || input.disabled) return;
+  const selected = builderProps.find((prop) => prop.id === input.dataset.propId)
+    || builderProps.find((prop) => prop.id === selectedBuilderPropId);
+  if (!selected || selected.type !== 'relay-podium-gate') {
+    updateBuilderDisplay();
+    return;
+  }
+  if (!input.checked && selected.relayStartFinish) {
+    input.checked = true;
+    return;
+  }
+  normalizeRelayPodiumStartFinishSelection(input.checked ? selected.id : null);
+  normalizeBuilderGateSequence();
+  invalidateBuilderTrackPicture();
+  updateBuilderDisplay();
+}
+
 document.querySelector('#gateColor').addEventListener('change', updateSelectedGateFromInspector);
 document.querySelector('#gateRouteNumber').addEventListener('change', updateSelectedGateRouteNumber);
 document.querySelector('#gateStartFinish').addEventListener('change', updateSelectedGateStartFinish);
 document.querySelector('#builderPropLaunch').addEventListener('change', updateSelectedLaunchPodium);
+document.querySelector('#builderRelayStartFinish').addEventListener('change', updateSelectedRelayPodiumStartFinish);
 document.querySelector('#deleteGate').addEventListener('click', () => {
   const index = builderGates.findIndex((gate) => gate.id === selectedGateId);
   if (index < 0) return;
@@ -16015,7 +17163,6 @@ document.querySelector('#deleteBuilderProp').addEventListener('click', () => {
     builderSelectionHelper.visible = false;
     invalidateBuilderTrackPicture();
     updateBuilderDisplay();
-    showToast(`${building.label} removed from this environment.`);
     return;
   }
   const index = builderProps.findIndex((prop) => prop.id === selectedBuilderPropId);
@@ -16036,7 +17183,6 @@ document.querySelector('#restoreEnvironmentBuildings').addEventListener('click',
   saveBuilderEnvironmentBuildings();
   updateBuilderBuildingRestoreButton();
   invalidateBuilderTrackPicture();
-  showToast('Removed map buildings restored.');
 });
 
 function updateEnvironmentFromControls() {
@@ -16084,7 +17230,6 @@ document.querySelector('#builderBiomeSelect').addEventListener('change', (event)
   setBuilderCamera();
   if (gatePlacementArmed) updateBuilderGhostPosition(orbit.target);
   void updatePartyConfig();
-  showToast(`${biomes[activeBiome].name} loaded. Environment edits save per biome.`);
 });
 
 function updateBuilderPublishState() {
@@ -16356,7 +17501,7 @@ document.querySelector('#publishCommunityTrack').addEventListener('click', async
         gateScalesX: uploadGates.map((slot) => slot.scaleX || slot.scale || 1),
         gateScalesY: uploadGates.map((slot) => slot.scaleY || slot.scale || 1),
         gateScalesZ: uploadGates.map((slot) => slot.scaleZ || slot.scale || 1),
-        objects: builderProps.map(({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium }) => ({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium })),
+        objects: builderProps.map(({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium, relayStartFinish }) => ({ type, x, y, z, rotation, rotationX, rotationY, rotationZ, scale, scaleX, scaleY, scaleZ, isLaunchPodium, relayStartFinish })),
         raceLine: builderRaceLineGenerated ? builderRaceLinePoints.map((point) => point.toArray()) : null,
         imageDataUrl: builderTrackPicture,
       }),
@@ -16497,7 +17642,8 @@ function restoreBuilderProps(savedTrack = null) {
   else {
     try { saved = JSON.parse(localStorage.getItem(`aerframe-props-${activeBiome}`) || '[]'); } catch { saved = []; }
   }
-  builderProps = Array.isArray(saved) ? saved.filter((prop) => builderPropTypes[prop.type]).slice(0, 100).map((prop, index) => {
+  builderProps = Array.isArray(saved) ? saved.filter((prop) => builderPropTypes[prop.type]
+    && (builderGameMode !== 'prop-hunt' || isPropHuntPlaceableType(prop.type))).slice(0, 100).map((prop, index) => {
     const x = THREE.MathUtils.clamp(Number(prop.x) || 0, -320, 320);
     const z = THREE.MathUtils.clamp(Number(prop.z) || 0, -320, 320);
     return {
@@ -16515,8 +17661,11 @@ function restoreBuilderProps(savedTrack = null) {
       scaleY: THREE.MathUtils.clamp(Number(prop.scaleY ?? prop.scale) || 1, 0.5, 2),
       scaleZ: THREE.MathUtils.clamp(Number(prop.scaleZ ?? prop.scale) || 1, 0.5, 2),
       isLaunchPodium: prop.type === 'podium' && prop.isLaunchPodium === true,
+      relayStartFinish: prop.type === 'relay-podium-gate' && prop.relayStartFinish === true,
+      relayEntryDirection: prop.relayEntryDirection === -1 ? -1 : 1,
     };
   }) : [];
+  normalizeRelayPodiumStartFinishSelection();
   const launchPodium = builderProps.find((prop) => prop.isLaunchPodium) || builderProps.find((prop) => prop.type === 'podium');
   builderProps.forEach((prop) => { prop.isLaunchPodium = prop.id === launchPodium?.id; });
   builderPropObjects = builderProps.map((prop) => createBuilderPropObject(prop));
@@ -16927,6 +18076,27 @@ renderer.domElement.addEventListener('dblclick', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (propHuntBindCaptureAction) {
+    if (event.code === 'Escape') {
+      propHuntBindCaptureAction = '';
+      propHuntBindCaptureUntil = 0;
+      syncPropHuntBindingControls('PROP HUNT BINDING CANCELLED.');
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && /^(Key[A-Z]|Digit[0-9]|Space|ShiftLeft|ShiftRight)$/.test(event.code)) {
+      const action = propHuntBindCaptureAction;
+      inputConfig.propHuntBindings[action] = { kind: 'key', code: event.code };
+      propHuntBindCaptureAction = '';
+      propHuntBindCaptureUntil = 0;
+      saveInputSettings();
+      syncPropHuntBindingControls(`KEY ${propHuntBindingLabel(action)} BOUND.`);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+  }
   if (event.code === 'Escape' && !flying && currentPage === 'builder' && !document.querySelector('#builderSettingsDrawer').hidden) {
     event.preventDefault();
     setBuilderSettingsOpen(false);
@@ -16935,6 +18105,11 @@ window.addEventListener('keydown', (event) => {
   if (event.code === 'Escape' && !authModal.hidden) {
     event.preventDefault();
     closeAuthModal();
+    return;
+  }
+  if (event.code === 'Escape' && !flying && currentPage === 'singleplayer' && soloCoursePickerOpen) {
+    event.preventDefault();
+    setSoloCoursePickerOpen(false);
     return;
   }
   if (event.code === 'Escape' && flying) {
@@ -16967,6 +18142,13 @@ window.addEventListener('keydown', (event) => {
   }
   const isBuilderNavigationKey = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight'].includes(event.code);
   const isTypingInControl = event.target instanceof Element && event.target.closest('input, select, textarea, [contenteditable="true"]');
+  if (!event.repeat && !isTypingInControl && flying && activePropHuntRole()) {
+    const action = Object.entries(inputConfig.propHuntBindings).find(([, binding]) => binding.kind === 'key' && binding.code === event.code)?.[0];
+    if (action && activatePropHuntAction(action)) {
+      event.preventDefault();
+      return;
+    }
+  }
   if (flying && ['Digit1', 'Numpad1'].includes(event.code) && !event.repeat && !isTypingInControl) {
     event.preventDefault();
     thirdPersonFlightCamera = !thirdPersonFlightCamera;
@@ -17116,8 +18298,16 @@ function updateFlight(dt) {
     }
   }
   if (partyRacePhase === 'race' && partyLobby?.gameMode === 'relay-race' && !isLocalRelayPilotActive()) {
+    if (launchPadState) {
+      flight.position.copy(launchPadState.position);
+      flight.orientation.setFromAxisAngle(axisY, launchPadState.heading);
+      previousFlightPosition.copy(flight.position);
+      launchPadState.started = false;
+    }
     flight.velocity.set(0, 0, 0);
+    flight.acceleration.set(0, 0, 0);
     flight.throttle = 0;
+    flight.motorOutput = 0;
     flight.speed = 0;
     updateFlightCamera(dt);
     document.querySelector('#speedValue').textContent = '000';
@@ -17127,6 +18317,46 @@ function updateFlight(dt) {
     updateRaceTimerDisplay();
     updateRaceStartOverlay();
     return;
+  }
+  if (partyLobby?.gameMode === 'prop-hunt'
+    && (partyRacePhase === 'race' || (partyRacePhase === 'lobby' && partyLobby.status === 'starting'))) {
+    const member = propHuntLocalMember();
+    if (!['hiding', 'hunting'].includes(partyLobby.propHunt?.phase) || member?.propHuntCaught
+      || (partyRacePhase === 'lobby' && partyLobby.status === 'starting')) {
+      flight.velocity.set(0, 0, 0);
+      flight.acceleration.set(0, 0, 0);
+      flight.throttle = 0;
+      flight.motorOutput = 0;
+      flight.speed = 0;
+      updateFlightCamera(dt);
+      document.querySelector('#speedValue').textContent = '000';
+      document.querySelector('#throttleValue').textContent = '0%';
+      document.querySelector('#throttleBar').style.width = '0%';
+      updateMotorAudio({ pitch: 0, roll: 0 });
+      updateRaceStartOverlay();
+      return;
+    }
+    if (partyLobby.propHunt.phase === 'hiding' && member?.propHuntRole === 'hunter') {
+      flight.position.copy(flightSpawnPosition);
+      flight.orientation.copy(flightSpawnOrientation);
+      previousFlightPosition.copy(flight.position);
+      flight.velocity.set(0, 0, 0);
+      flight.acceleration.set(0, 0, 0);
+      flight.throttle = 0;
+      flight.motorOutput = 0;
+      flight.speed = 0;
+      updateFlightCamera(dt);
+      document.querySelector('#speedValue').textContent = '000';
+      document.querySelector('#throttleValue').textContent = '0%';
+      document.querySelector('#throttleBar').style.width = '0%';
+      updateMotorAudio({ pitch: 0, roll: 0 });
+      updateRaceStartOverlay();
+      return;
+    }
+    if (member?.propHuntRole === 'hider') {
+      updatePropHuntHiderFlight(dt);
+      return;
+    }
   }
   if (flightDamageState.crashed) {
     updateDestroyedFlight(dt);
@@ -17405,6 +18635,7 @@ function animate(now) {
         });
       }
     }
+    updatePropHuntWorld();
     if (menuBackdropRoot.visible) {
       if (menuStarTimeUniform) menuStarTimeUniform.value = now * 0.00042;
     }
@@ -17471,7 +18702,7 @@ function attachMenuCardCapture(buttonSelector, source) {
 }
 
 function captureMenuChoiceTiles() {
-  if (mainMenuChoiceTilesCaptured || worldLoadFailureActive) return;
+  if (mainMenuChoiceTilesCaptured || worldLoadFailureActive || !authSessionReady || !droneShowcaseModelLoadComplete) return;
   if (!root.classList.contains('has-rendered-world')) {
     requestAnimationFrame(captureMenuChoiceTiles);
     return;
@@ -17507,6 +18738,7 @@ function captureMenuChoiceTiles() {
     visible: drone.visible,
     position: drone.position.clone(),
     rotation: drone.rotation.clone(),
+    scale: drone.scale.clone(),
   }));
   const previousPosition = camera.position.clone();
   const previousQuaternion = camera.quaternion.clone();
@@ -17522,7 +18754,6 @@ function captureMenuChoiceTiles() {
     visible: podium.visible,
     position: podium.position.clone(),
   }));
-  const podiumPositions = [[-6, -6], [6, -6], [-6, 6], [6, 6]];
   const previousTrackId = activeTrack?.id;
   let photoGround = null;
   let photoGroundGeometry = null;
@@ -17532,9 +18763,11 @@ function captureMenuChoiceTiles() {
   let grassPreviewMaterial = null;
   let grassPreviewTexture = null;
   const temporaryShowcaseLights = [];
+  const temporaryDroneMaterialOverrides = [];
+  const droneCaptureColors = ['#25dfff', '#ff47b5', '#ffb640', '#6af282'];
 
   try {
-    environmentRoot.visible = true;
+    environmentRoot.visible = false;
     gateRoot.visible = false;
     trackRoot.visible = false;
     communityPropRoot.visible = false;
@@ -17595,14 +18828,52 @@ function captureMenuChoiceTiles() {
       fillLight.target.position.copy(focus);
     };
 
+    const tintCaptureDrone = (drone, color) => {
+      drone.traverse((node) => {
+        if (!node.isMesh) return;
+        const originalMaterial = node.material;
+        const originalMaterials = Array.isArray(originalMaterial) ? originalMaterial : [originalMaterial];
+        const armSlots = Array.isArray(node.userData.droneArmGlowMaterialSlots) ? node.userData.droneArmGlowMaterialSlots : [];
+        const bodySlots = Array.isArray(node.userData.droneBodyColorMaterialSlots) ? node.userData.droneBodyColorMaterialSlots : [];
+        const colorSlots = new Set([...armSlots, ...bodySlots]);
+        if (!armSlots.length && node.userData.isDroneArmGlowMaterial) {
+          originalMaterials.forEach((_, slot) => colorSlots.add(slot));
+        }
+        if (!bodySlots.length && (node.userData.isDroneSolidBodyColor || node.userData.isDronePaintedBody)) {
+          originalMaterials.forEach((_, slot) => colorSlots.add(slot));
+        }
+        if (!colorSlots.size) return;
+
+        const nextMaterials = originalMaterials.slice();
+        const clones = [];
+        colorSlots.forEach((slot) => {
+          if (!Number.isInteger(slot) || !originalMaterials[slot]?.clone) return;
+          const material = originalMaterials[slot].clone();
+          material.color?.set(color);
+          material.emissive?.set(color);
+          if (material.emissiveIntensity !== undefined && !armSlots.includes(slot)) {
+            material.emissiveIntensity = Math.max(material.emissiveIntensity, 0.2);
+          }
+          nextMaterials[slot] = material;
+          clones.push(material);
+        });
+        if (!clones.length) return;
+        node.material = Array.isArray(originalMaterial) ? nextMaterials : nextMaterials[0];
+        temporaryDroneMaterialOverrides.push({ node, originalMaterial, clones });
+      });
+    };
+
     photoGroundGeometry = new THREE.PlaneGeometry(120, 120);
     photoGroundTexture = docksGrassGroundTexture.clone();
-    photoGroundTexture.repeat.set(12, 12);
+    photoGroundTexture.repeat.set(30, 30);
     photoGroundTexture.needsUpdate = true;
     photoGroundMaterial = new THREE.MeshStandardMaterial({
       map: photoGroundTexture,
-      color: 0xb5d092,
-      roughness: 0.92,
+      color: 0xffffff,
+      roughness: 0.78,
+      metalness: 0,
+      emissive: 0x10190b,
+      emissiveIntensity: 0.22,
     });
     photoGround = new THREE.Mesh(photoGroundGeometry, photoGroundMaterial);
     photoGround.rotation.x = -Math.PI / 2;
@@ -17610,38 +18881,46 @@ function captureMenuChoiceTiles() {
     scene.add(photoGround);
 
     showDrone.visible = true;
+    showDrone.scale.setScalar(0.9);
     showDrone.position.set(0, menuDroneBaseY, 0);
     showDrone.rotation.set(0, 0.4, 0);
-    camera.fov = 29;
+    showDrone.updateMatrixWorld(true);
+    const soloDroneBounds = new THREE.Box3().setFromObject(showDrone);
+    if (!soloDroneBounds.isEmpty()) {
+      showDrone.position.y += RED_RACE_PODIUM_TOP_Y + 0.035 - soloDroneBounds.min.y;
+    }
+    updateMenuPodiumLabels(partyLobby);
+    setRacePodiumUsername(menuStageRoot.children[0], signedInUser?.username || 'SOLO PILOT');
+    camera.up.set(0, 1, 0);
+    camera.fov = 40;
     camera.updateProjectionMatrix();
-    camera.position.set(6, 25, 5);
-    camera.lookAt(0, 3.7, 0);
-    setCaptureLighting(new THREE.Vector3(0, menuDroneBaseY, 0), 0.85);
-    attachMenuCardCapture(selectors[0], drawCapture());
+    camera.position.set(0, 3.8, 6.1);
+    camera.lookAt(0, 3.45, 0);
+    setCaptureLighting(new THREE.Vector3(0, 2.7, 0), 0.9);
+    if (droneShowcaseModelReady) attachMenuCardCapture(selectors[0], drawCapture());
+    showDrone.scale.copy(previousDrones[0].scale);
     const savedTrack = previousTrackId
       ? trackCatalog[activeBiome]?.find((track) => track.id === previousTrackId)
       : null;
 
+    environmentRoot.visible = true;
     showDrone.visible = false;
     partyDroneRoot.visible = true;
-    const [pilotX, pilotZ] = podiumPositions[0];
+    const lineupX = [-7.5, -2.5, 2.5, 7.5];
+    const showcaseDrones = [showDrone, ...partyDroneObjects];
     menuStageRoot.children.forEach((podium, index) => {
-      const [x, z] = podiumPositions[index] || [0, 0];
-      podium.visible = index < podiumPositions.length;
-      podium.position.set(x, 0, z);
+      podium.visible = index < showcaseDrones.length;
+      podium.position.set(lineupX[index] || 0, 0, 0);
     });
-    showDrone.visible = true;
-    showDrone.position.set(pilotX, menuDroneBaseY, pilotZ);
-    showDrone.rotation.set(0, 0.4, 0);
-    partyDroneObjects.forEach((drone, index) => {
+    showcaseDrones.forEach((drone, index) => {
       drone.visible = true;
-      const [x, z] = podiumPositions[index + 1] || [0, 0];
-      drone.position.set(x, menuDroneBaseY, z);
-      drone.rotation.set(0, Math.PI + index * 0.42, 0);
+      drone.position.set(lineupX[index], menuDroneBaseY, 0);
+      drone.rotation.set(0, index % 2 ? Math.PI - 0.28 : 0.28, 0);
+      tintCaptureDrone(drone, droneCaptureColors[index]);
     });
     scene.remove(photoGround);
     photoGroundGeometry.dispose();
-    photoGroundTexture.dispose();
+    photoGroundTexture?.dispose();
     photoGroundMaterial.dispose();
     photoGround = null;
     photoGroundGeometry = null;
@@ -17650,10 +18929,11 @@ function captureMenuChoiceTiles() {
     menuBackdropRoot.visible = true;
     stars.visible = true;
     setCaptureLighting(new THREE.Vector3(0, 1.5, 0), 0.8);
-    camera.fov = 34;
+    camera.up.set(0, 1, 0);
+    camera.fov = 50;
     camera.updateProjectionMatrix();
-    camera.position.set(4, 15, 19);
-    camera.lookAt(0, 3.7, 0);
+    camera.position.set(0, 5.4, 17);
+    camera.lookAt(0, 2.85, 0);
     attachMenuCardCapture(selectors[1], drawCapture());
     menuStageRoot.children.forEach((podium, index) => {
       const previous = previousPodiums[index];
@@ -17765,6 +19045,10 @@ function captureMenuChoiceTiles() {
     }
     grassPreviewMaterial?.dispose();
     grassPreviewTexture?.dispose();
+    temporaryDroneMaterialOverrides.forEach(({ node, originalMaterial, clones }) => {
+      node.material = originalMaterial;
+      clones.forEach((material) => material.dispose());
+    });
     if (previousTrackId) applyTrackSelection(previousTrackId, false);
     sceneObjects.forEach((object, index) => { object.visible = previousVisibility[index]; });
     menuStageRoot.children.forEach((podium, index) => {
@@ -17777,6 +19061,7 @@ function captureMenuChoiceTiles() {
       drone.visible = previousDrones[index].visible;
       drone.position.copy(previousDrones[index].position);
       drone.rotation.copy(previousDrones[index].rotation);
+      drone.scale.copy(previousDrones[index].scale);
     });
     camera.position.copy(previousPosition);
     camera.quaternion.copy(previousQuaternion);
